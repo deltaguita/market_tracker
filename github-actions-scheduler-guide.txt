@@ -1,0 +1,420 @@
+GitHub Actions 定時任務技術指南
+=====================================
+
+一、基本架構
+-----------
+檔案位置: .github/workflows/your-job.yml
+
+最小可運行範例:
+```yaml
+name: My Scheduled Job
+
+on:
+  schedule:
+    - cron: '30 10 * * 1-5'    # UTC 時間，週一至週五 10:30
+  workflow_dispatch:           # 允許手動觸發
+
+jobs:
+  my-job:
+    runs-on: ubuntu-latest     # 使用 GitHub 免費 Ubuntu runner
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run script
+        run: python main.py
+```
+
+二、Cron 排程語法
+-----------------
+格式: 分 時 日 月 星期
+範例:
+  '0 0 * * *'      每天 00:00 UTC
+  '30 10 * * 1-5'  週一到週五 10:30 UTC
+  '0 */6 * * *'    每 6 小時
+  '0 9 * * 1'      每週一 09:00 UTC
+
+注意: GitHub 使用 UTC 時區，台灣時間需 -8 小時
+
+三、Python 環境設定
+-------------------
+```yaml
+- name: Set up Python
+  uses: actions/setup-python@v5
+  with:
+    python-version: '3.10'
+    cache: 'pip'              # 快取 pip 套件加速
+
+- name: Install dependencies
+  run: |
+    python -m pip install --upgrade pip
+    pip install pandas requests  # 你需要的套件
+```
+
+四、Matrix 並行執行
+-------------------
+同時執行多個任務，每個獨立 runner:
+
+```yaml
+jobs:
+  parallel-job:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false        # 一個失敗不影響其他
+      matrix:
+        task: [task1, task2, task3]
+    steps:
+      - run: python main.py --task ${{ matrix.task }}
+```
+
+五、環境變數與 Secrets
+----------------------
+設定位置: GitHub Repo → Settings → Secrets and variables → Actions
+
+使用方式:
+```yaml
+- name: Run with secrets
+  env:
+    API_KEY: ${{ secrets.MY_API_KEY }}
+  run: python main.py
+```
+
+六、系統套件安裝
+----------------
+```yaml
+- name: Install system packages
+  run: |
+    sudo apt-get update
+    sudo apt-get install -y fonts-noto-cjk  # 中文字型
+```
+
+七、免費額度
+------------
+公開倉庫: 無限制
+私有倉庫: 2,000 分鐘/月
+單次執行: 最長 6 小時
+
+八、限制與注意事項
+------------------
+1. 排程可能延遲 - 高負載時 GitHub 會延後執行
+2. 最短間隔 5 分鐘 - cron 不支援更頻繁
+3. 60 天無活動 - 排程會自動停用
+4. 共享 IP - 無法控制出口 IP
+
+九、手動觸發帶參數
+------------------
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Select target'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - option1
+          - option2
+
+jobs:
+  my-job:
+    steps:
+      - run: echo "Target: ${{ github.event.inputs.target }}"
+```
+
+十、實用技巧
+------------
+1. 快取依賴: cache: 'pip' 減少安裝時間
+2. 條件執行: if: github.event.inputs.target == 'all'
+3. 輸出檔案: 使用 actions/upload-artifact@v4 保存結果
+4. 發送通知: 整合 email/webhook 在完成後通知
+
+十一、完整範本
+--------------
+```yaml
+name: Scheduled Task
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-task:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      
+      - run: pip install -r requirements.txt
+      
+      - name: Execute
+        env:
+          API_KEY: ${{ secrets.API_KEY }}
+        run: python main.py
+      
+      - uses: actions/upload-artifact@v4
+        with:
+          name: output
+          path: output/
+```
+
+
+十二、爬蟲防封鎖技術
+====================
+
+【輕量級策略 - 適用友善 API】
+
+1. 隨機延遲 (Jitter)
+--------------------
+```python
+import time, random
+
+# 每次請求前隨機等待，打亂請求頻率
+time.sleep(random.uniform(0.5, 1.5))
+```
+
+2. 限制並行數
+-------------
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+MAX_WORKERS = 3  # 控制同時連線數
+with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    ...
+```
+
+3. 重試機制 + 指數退避
+----------------------
+```python
+for attempt in range(3):
+    try:
+        response = requests.get(url, timeout=15)
+        break
+    except Exception as e:
+        if "Rate limited" in str(e):
+            time.sleep(random.uniform(15, 30))  # 被限流時長休眠
+        time.sleep(random.uniform(2, 5))  # 重試前隨機等待
+```
+
+4. 批次休息
+-----------
+```python
+# 每處理 100 筆強制休息
+if count % 100 == 0:
+    time.sleep(random.uniform(5, 10))
+```
+
+5. 快取機制
+-----------
+```python
+import os
+
+# 檔案已存在就跳過
+if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
+    return "skip"
+
+# 當日快取，避免重複抓清單
+from datetime import datetime
+file_mtime = os.path.getmtime(cache_path)
+if datetime.fromtimestamp(file_mtime).date() == datetime.now().date():
+    return load_cache()
+```
+
+【進階策略 - 應對嚴格反爬】
+
+6. User-Agent 偽裝
+------------------
+```python
+import random
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/119.0.0.0",
+]
+
+headers = {"User-Agent": random.choice(USER_AGENTS)}
+response = requests.get(url, headers=headers)
+```
+
+7. Proxy / IP 輪換
+------------------
+```python
+proxies = [
+    "http://proxy1:port",
+    "http://proxy2:port",
+]
+
+proxy = {"http": random.choice(proxies), "https": random.choice(proxies)}
+response = requests.get(url, proxies=proxy)
+```
+
+8. Cookie / Session 管理
+------------------------
+```python
+session = requests.Session()
+
+# 先訪問首頁取得 cookie
+session.get("https://example.com")
+
+# 後續請求自動帶 cookie
+response = session.get("https://example.com/api/data")
+```
+
+9. 瀏覽器模擬 (Playwright)
+--------------------------
+```python
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    page = browser.new_page()
+    page.goto("https://example.com")
+    content = page.content()
+    browser.close()
+```
+
+GitHub Actions 安裝:
+```yaml
+- run: pip install playwright && playwright install chromium
+```
+
+10. Referer 偽裝
+----------------
+```python
+headers = {
+    "User-Agent": "Mozilla/5.0 ...",
+    "Referer": "https://example.com/",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+```
+
+【策略選擇指南】
+
+場景                          建議策略
+----------------------------  ----------------------------------
+友善 API (yfinance 等)        隨機延遲 + 限制並行 + 快取
+一般網頁                      + User-Agent + Referer
+有 Cloudflare 等防護          + Playwright 瀏覽器模擬
+需要大量請求                  + Proxy 輪換
+需要登入狀態                  + Session/Cookie 管理
+
+【GitHub Actions 特別注意】
+
+1. 共享 IP - GitHub runner IP 可能已被部分網站標記
+2. 無法持久化 - 每次執行環境重置，需外部儲存快取
+3. 6 小時限制 - 大量爬取需分批或用 matrix 並行
+
+
+十三、通知服務整合
+==================
+
+【Telegram Bot - 推薦】
+
+設定步驟:
+1. 搜尋 @BotFather → 發送 /newbot
+2. 設定 Bot 名稱與 username (需以 _bot 結尾)
+3. 取得 Token
+4. 對你的 Bot 發送訊息後，訪問:
+   https://api.telegram.org/bot<TOKEN>/getUpdates
+5. 從回應中找到 chat.id
+
+Python 發送:
+```python
+import requests
+
+def send_telegram(token, chat_id, message):
+    requests.post(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"}
+    )
+
+# 範例
+send_telegram(TOKEN, CHAT_ID, "🔔 <b>價格異動</b>\n商品A: $100 → $80")
+```
+
+GitHub Actions 使用:
+```yaml
+env:
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+steps:
+  - name: Send Telegram
+    run: |
+      curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        -d "chat_id=${TELEGRAM_CHAT_ID}" \
+        -d "text=🔔 任務完成"
+```
+
+【LINE Notify】
+
+設定: https://notify-bot.line.me/ 取得 Token
+
+```python
+def send_line(token, message):
+    requests.post(
+        "https://notify-api.line.me/api/notify",
+        headers={"Authorization": f"Bearer {token}"},
+        data={"message": message}
+    )
+```
+
+【Discord Webhook】
+
+設定: 伺服器設定 → 整合 → Webhook → 複製 URL
+
+```python
+def send_discord(webhook_url, message):
+    requests.post(webhook_url, json={"content": message})
+```
+
+【Resend Email】
+
+免費額度: 3,000 封/月
+設定: https://resend.com 註冊取得 API Key
+
+```python
+import resend
+
+resend.api_key = "re_xxxxx"
+resend.Emails.send({
+    "from": "通知 <onboarding@resend.dev>",
+    "to": ["your@email.com"],
+    "subject": "標題",
+    "html": "<h1>內容</h1>"
+})
+```
+
+【Gmail SMTP】
+
+需先建立應用程式密碼: Google 帳戶 → 安全性 → 應用程式密碼
+
+```python
+import smtplib
+from email.mime.text import MIMEText
+
+def send_gmail(sender, password, to, subject, body):
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = to
+    
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(sender, password)
+        server.send_message(msg)
+```
+
+【比較表】
+
+服務            免費額度        設定難度    適用場景
+--------------  -------------  ----------  ------------------
+Telegram        無限制          簡單        個人通知首選
+LINE Notify     無限制          簡單        台灣用戶
+Discord         無限制          最簡單      團隊/社群通知
+Resend          3000封/月       中等        正式 Email 通知
+Gmail SMTP      500封/天        中等        備用方案
