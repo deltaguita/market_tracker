@@ -28,7 +28,10 @@ jobs:
       - name: Install Playwright
         run: |
           playwright install chromium
-          playwright install-deps chromium
+          # Ubuntu 24.04 使用 libasound2t64 取代 libasound2
+          sudo apt-get update
+          sudo apt-get install -y libasound2t64 || true
+          playwright install-deps chromium || true
 
       - name: Update exchange rate
         run: python update_exchange_rate.py
