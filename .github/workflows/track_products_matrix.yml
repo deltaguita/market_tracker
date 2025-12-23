@@ -1,0 +1,135 @@
+name: Track Products (Matrix)
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # 每 6 小時執行一次（UTC 時間）
+  workflow_dispatch: # 允許手動觸發
+
+jobs:
+  # 準備階段：讀取 URLs 並生成 matrix
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate matrix from URLs
+        id: set-matrix
+        run: |
+          python3 << 'EOF'
+          import json
+          import os
+
+          with open('config/urls.json', 'r', encoding='utf-8') as f:
+              config = json.load(f)
+
+          urls = config.get('tracking_urls', [])
+          if not urls:
+              print("No URLs found")
+              exit(1)
+
+          # 生成 matrix，每個 URL 一個 job
+          matrix_items = []
+          for i, url in enumerate(urls):
+              matrix_items.append({
+                  "url_index": i,
+                  "url_name": url.get("name", f"URL-{i}")
+              })
+
+          matrix = {"include": matrix_items}
+
+          # 輸出到 GITHUB_OUTPUT
+          output_file = os.environ.get('GITHUB_OUTPUT', '/dev/stdout')
+          with open(output_file, 'a') as f:
+              f.write(f"matrix<<MATRIX_EOF\n")
+              f.write(json.dumps(matrix))
+              f.write(f"\nMATRIX_EOF\n")
+          EOF
+
+  # 更新匯率（只執行一次）
+  update-exchange-rate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Update exchange rate
+        run: python update_exchange_rate.py
+
+      - name: Commit exchange rate
+        run: |
+          git config --local user.email "deltaguita@gmail.com"
+          git config --local user.name "deltaguita"
+          git add data/exchange_rate.db
+          git diff --staged --quiet || git commit -m "Update exchange rate [skip ci]"
+          git push || true
+
+  # 並行處理每個 URL
+  track:
+    needs: [prepare, update-exchange-rate]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # 一個失敗不影響其他
+      max-parallel: 3 # 最多同時執行 3 個 job（可調整）
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    permissions:
+      contents: write # 允許 commit 和 push
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright
+        run: |
+          playwright install chromium
+          # Ubuntu 24.04 使用 libasound2t64 取代 libasound2
+          sudo apt-get update
+          sudo apt-get install -y libasound2t64 || true
+          playwright install-deps chromium || true
+
+      - name: Staggered delay (避免同時啟動)
+        run: |
+          # 根據 url_index 延遲啟動，每個 job 間隔 30 秒
+          DELAY=$(( ${{ matrix.url_index }} * 30 ))
+          echo "Waiting ${DELAY} seconds before starting..."
+          sleep ${DELAY}
+
+      - name: Run tracker for ${{ matrix.url_name }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          URL_INDEX: ${{ matrix.url_index }}
+        run: |
+          python main_single.py
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "deltaguita@gmail.com"
+          git config --local user.name "deltaguita"
+          git pull --rebase || true
+          git add data/products.db
+          git diff --staged --quiet || git commit -m "Update products for ${{ matrix.url_name }} [skip ci]"
+          git push || true
