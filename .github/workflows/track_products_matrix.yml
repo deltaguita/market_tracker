@@ -69,13 +69,68 @@ jobs:
       - name: Update exchange rate
         run: python update_exchange_rate.py
 
-      - name: Commit exchange rate
+      - name: Upload exchange rate database as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: exchange-rate-db
+          path: data/exchange_rate.db
+          retention-days: 1
+
+  # 統一 commit 和 push 所有變更
+  finalize:
+    needs: [track, update-exchange-rate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: products-db-*
+          merge-multiple: false
+          path: artifacts/
+
+      - name: Download exchange rate database
+        uses: actions/download-artifact@v4
+        with:
+          pattern: exchange-rate-db
+          merge-multiple: false
+          path: artifacts/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Merge product databases
+        run: |
+          python merge_databases.py
+
+      - name: Copy exchange rate database
+        run: |
+          if [ -f "artifacts/exchange-rate-db/exchange_rate.db" ]; then
+            mkdir -p data
+            cp artifacts/exchange-rate-db/exchange_rate.db data/exchange_rate.db
+            echo "✓ 已複製匯率資料庫"
+          else
+            echo "警告: 未找到匯率資料庫，使用現有的"
+          fi
+
+      - name: Commit and push all changes
         run: |
           git config --local user.email "deltaguita@gmail.com"
           git config --local user.name "deltaguita"
-          git add data/exchange_rate.db
-          git diff --staged --quiet || git commit -m "Update exchange rate [skip ci]"
-          git push || true
+          git pull --rebase || true
+          git add data/products.db data/exchange_rate.db
+          if ! git diff --staged --quiet; then
+            git commit -m "Update product data and exchange rate [skip ci]"
+            git push
+          else
+            echo "No changes to commit"
+          fi
 
   # 並行處理每個 URL
   track:
@@ -85,8 +140,7 @@ jobs:
       fail-fast: false # 一個失敗不影響其他
       max-parallel: 3 # 最多同時執行 3 個 job（可調整）
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
-    permissions:
-      contents: write # 允許 commit 和 push
+    # 不再需要 contents: write，因為不再直接 commit
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -125,11 +179,9 @@ jobs:
         run: |
           python main_single.py
 
-      - name: Commit and push changes
-        run: |
-          git config --local user.email "deltaguita@gmail.com"
-          git config --local user.name "deltaguita"
-          git pull --rebase || true
-          git add data/products.db
-          git diff --staged --quiet || git commit -m "Update products for ${{ matrix.url_name }} [skip ci]"
-          git push || true
+      - name: Upload products database as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: products-db-${{ matrix.url_index }}
+          path: data/products.db
+          retention-days: 1
