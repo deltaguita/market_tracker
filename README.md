@@ -1,6 +1,5 @@
 # Market Tracker
-
-Mercari 商品追蹤系統
+商品追蹤系統
 
 ## 簡介
 
