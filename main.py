@@ -3,9 +3,6 @@
 Mercari 商品追蹤系統主程式
 """
 import json
-import os
-import sys
-from pathlib import Path
 from dotenv import load_dotenv
 
 from src.scraper import MercariScraper

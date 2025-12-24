@@ -52,7 +52,7 @@ class TelegramNotifier:
         )
         return self._send_message(message, product.get("image_url"))
 
-    def notify_price_drop(self, product: Dict, old_price_jpy: int, old_price_twd: int = None):
+    def notify_price_drop(self, product: Dict, old_price_jpy: int):
         """通知價格降低（只以日幣價格作為比價基準）"""
         price_jpy = product.get("price_jpy", 0)
         price_twd = product.get("price_twd", 0)
