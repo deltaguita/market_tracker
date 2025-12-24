@@ -172,14 +172,12 @@ class ProductStorage:
             else:
                 # 已存在的商品，檢查價格是否降低
                 existing = existing_products[product_id]
-                # 只檢查有實際價格的情況（避免 0 或 1 的誤判）
+                # 只以日幣價格作為比價基準（避免匯率變動造成的誤判）
                 price_dropped = False
                 old_price_jpy = existing["lowest_price_jpy"]
-                old_price_twd = existing["lowest_price_twd"]
                 new_price_jpy = product["price_jpy"]
-                new_price_twd = product["price_twd"]
 
-                # 檢查日圓價格是否降低（需要兩個價格都 > 0 且不為 None）
+                # 只檢查日圓價格是否降低（需要兩個價格都 > 0 且不為 None）
                 if (
                     old_price_jpy is not None
                     and old_price_jpy > 0
@@ -189,23 +187,12 @@ class ProductStorage:
                     if new_price_jpy < old_price_jpy:
                         price_dropped = True
 
-                # 檢查台幣價格是否降低（需要兩個價格都 > 0 且不為 None）
-                if (
-                    old_price_twd is not None
-                    and old_price_twd > 0
-                    and new_price_twd is not None
-                    and new_price_twd > 0
-                ):
-                    if new_price_twd < old_price_twd:
-                        price_dropped = True
-
-                # 只有在價格確實降低時才通知
+                # 只有在日幣價格確實降低時才通知
                 if price_dropped:
                     price_dropped_products.append(
                         {
                             "product": product,
                             "old_price_jpy": old_price_jpy,
-                            "old_price_twd": old_price_twd,
                         }
                     )
                 self.upsert_product(product)

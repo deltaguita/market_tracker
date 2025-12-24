@@ -52,8 +52,8 @@ class TelegramNotifier:
         )
         return self._send_message(message, product.get("image_url"))
 
-    def notify_price_drop(self, product: Dict, old_price_jpy: int, old_price_twd: int):
-        """通知價格降低"""
+    def notify_price_drop(self, product: Dict, old_price_jpy: int, old_price_twd: int = None):
+        """通知價格降低（只以日幣價格作為比價基準）"""
         price_jpy = product.get("price_jpy", 0)
         price_twd = product.get("price_twd", 0)
 
@@ -65,33 +65,17 @@ class TelegramNotifier:
             price_parts.append(f"NT${price_twd:,}")
         price_str = " / ".join(price_parts) if price_parts else "價格未標示"
 
-        # 計算降價資訊（只顯示有實際價格且確實降低的部分）
-        drop_info = []
-        # 日圓價格降低
+        # 計算降價資訊（只以日幣價格計算，避免匯率變動造成的誤判）
+        drop_str = ""
         if old_price_jpy > 0 and price_jpy > 0 and price_jpy < old_price_jpy:
             drop_jpy = old_price_jpy - price_jpy
             drop_percent_jpy = (drop_jpy / old_price_jpy) * 100
             # 確保百分比在合理範圍內（0-100%）
             if 0 <= drop_percent_jpy <= 100:
-                drop_info.append(f"¥{drop_jpy:,} ({drop_percent_jpy:.1f}%)")
+                drop_str = f"¥{drop_jpy:,} ({drop_percent_jpy:.1f}%)"
 
-        # 台幣價格降低
-        if old_price_twd > 0 and price_twd > 0 and price_twd < old_price_twd:
-            drop_twd = old_price_twd - price_twd
-            drop_percent_twd = (drop_twd / old_price_twd) * 100
-            # 確保百分比在合理範圍內（0-100%）
-            if 0 <= drop_percent_twd <= 100:
-                drop_info.append(f"NT${drop_twd:,} ({drop_percent_twd:.1f}%)")
-
-        drop_str = " / ".join(drop_info) if drop_info else "降價資訊"
-
-        # 原價資訊
-        old_price_parts = []
-        if old_price_jpy > 0:
-            old_price_parts.append(f"¥{old_price_jpy:,}")
-        if old_price_twd > 0:
-            old_price_parts.append(f"NT${old_price_twd:,}")
-        old_price_str = " / ".join(old_price_parts) if old_price_parts else "原價未標示"
+        # 原價資訊（只顯示日幣，因為比價基準是日幣）
+        old_price_str = f"¥{old_price_jpy:,}" if old_price_jpy > 0 else "原價未標示"
 
         message = (
             f"📉 <b>價格降低</b>\n\n"
@@ -114,9 +98,8 @@ class TelegramNotifier:
 
         for item in price_dropped:
             product = item["product"]
-            if self.notify_price_drop(
-                product, item["old_price_jpy"], item["old_price_twd"]
-            ):
+            # 只傳遞日幣價格作為比價基準
+            if self.notify_price_drop(product, item["old_price_jpy"]):
                 success_count += 1
 
         return success_count, total_count
