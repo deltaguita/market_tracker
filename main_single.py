@@ -6,7 +6,6 @@
 import json
 import os
 import sys
-from pathlib import Path
 from dotenv import load_dotenv
 
 from src.scraper import MercariScraper

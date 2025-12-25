@@ -27,6 +27,7 @@ Thumbs.db
 *.db-journal
 *.db-wal
 *.db-shm
+*.db.backup
 # Exchange rate database should be committed
 !data/exchange_rate.db
 
