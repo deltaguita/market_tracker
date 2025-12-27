@@ -189,10 +189,12 @@ class ProductStorage:
 
                 # 只有在日幣價格確實降低時才通知
                 if price_dropped:
+                    old_price_twd = existing.get("price_twd") or existing.get("lowest_price_twd")
                     price_dropped_products.append(
                         {
                             "product": product,
                             "old_price_jpy": old_price_jpy,
+                            "old_price_twd": old_price_twd,
                         }
                     )
                 self.upsert_product(product)

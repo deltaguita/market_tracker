@@ -39,14 +39,18 @@ def main():
         print(f"URL index {url_index} out of range (total: {len(tracking_urls)})")
         return
 
-    # 獲取要處理的 URL
-    url_config = tracking_urls[url_index]
-    name = url_config.get("name", "Unknown")
-    url = url_config.get("url")
-    
-    if not url:
-        print(f"Skipping {name}: No URL provided")
-        return
+        # 獲取要處理的 URL
+        url_config = tracking_urls[url_index]
+        name = url_config.get("name", "Unknown")
+        url = url_config.get("url")
+        max_ntd = url_config.get("max_ntd")  # 可選的台幣價格門檻
+
+        if not url:
+            print(f"Skipping {name}: No URL provided")
+            return
+
+        if max_ntd is not None:
+            print(f"Max NTD threshold: {max_ntd}")
 
     print(f"\n{'='*60}")
     print(f"Processing: {name} (Index: {url_index})")
@@ -68,15 +72,37 @@ def main():
         new_products = result["new"]
         price_dropped = result["price_dropped"]
 
-        print(f"New products: {len(new_products)}")
-        print(f"Price dropped: {len(price_dropped)}")
+        # 如果有設定 max_ntd，過濾符合門檻的商品
+        if max_ntd is not None:
+            # 過濾新商品：只保留台幣價格 <= max_ntd 的商品
+            filtered_new_products = [
+                p for p in new_products
+                if p.get("price_twd", 0) > 0 and p.get("price_twd", 0) <= max_ntd
+            ]
+            print(f"New products (total: {len(new_products)}, within budget: {len(filtered_new_products)})")
+
+            # 過濾降價商品：只保留台幣價格 <= max_ntd 的商品
+            filtered_price_dropped = [
+                item for item in price_dropped
+                if item["product"].get("price_twd", 0) > 0
+                and item["product"].get("price_twd", 0) <= max_ntd
+            ]
+            print(f"Price dropped (total: {len(price_dropped)}, within budget: {len(filtered_price_dropped)})")
+
+            new_products = filtered_new_products
+            price_dropped = filtered_price_dropped
+        else:
+            print(f"New products: {len(new_products)}")
+            print(f"Price dropped: {len(price_dropped)}")
 
         # 發送通知（每個 URL 獨立發送）
         if new_products or price_dropped:
             print(f"\n{'='*60}")
             print(f"Sending notifications for {name}...")
             print(f"{'='*60}\n")
-            success, total = notifier.notify_batch(new_products, price_dropped)
+            success, total = notifier.notify_batch(
+                new_products, price_dropped, max_ntd=max_ntd, price_dropped_with_old_twd=price_dropped
+            )
             print(f"Notifications sent: {success}/{total}")
         else:
             print(f"\nNo new products or price changes for {name}")

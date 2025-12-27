@@ -2,6 +2,7 @@
 """
 測試 TelegramNotifier 類別
 """
+
 import unittest
 import os
 from unittest.mock import patch, MagicMock
@@ -117,7 +118,97 @@ class TestTelegramNotifier(unittest.TestCase):
         self.assertEqual(total, 2)
         self.assertEqual(mock_post.call_count, 2)
 
+    @patch("src.notifier.requests.post")
+    def test_notify_new_product_within_budget(self, mock_post):
+        """測試通知預算內新商品上架"""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        notifier = TelegramNotifier()
+        product = {
+            "id": "test123",
+            "title": "測試商品",
+            "price_jpy": 1000,
+            "price_twd": 200,
+            "image_url": "https://example.com/image.jpg",
+            "product_url": "https://example.com/product",
+        }
+
+        result = notifier.notify_new_product(product, is_within_budget=True)
+        self.assertTrue(result)
+        mock_post.assert_called_once()
+
+        # 檢查訊息內容包含「有預算內目標商品上架」
+        # 有圖片時使用 caption，沒有圖片時使用 text
+        call_data = mock_post.call_args[1]["json"]
+        message_text = call_data.get("caption") or call_data.get("text", "")
+        self.assertIn("有預算內目標商品上架", message_text)
+
+    @patch("src.notifier.requests.post")
+    def test_notify_price_drop_to_budget(self, mock_post):
+        """測試通知降價至預算範圍"""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        notifier = TelegramNotifier()
+        product = {
+            "id": "test123",
+            "title": "測試商品",
+            "price_jpy": 800,  # 新價格
+            "price_twd": 400,  # 新價格在預算內（max_ntd=500）
+            "image_url": "https://example.com/image.jpg",
+            "product_url": "https://example.com/product",
+        }
+
+        # 原本價格 600 TWD（超過預算 500），現在降到 400 TWD（在預算內）
+        result = notifier.notify_price_drop(
+            product, old_price_jpy=1000, old_price_twd=600, max_ntd=500
+        )
+        self.assertTrue(result)
+        mock_post.assert_called_once()
+
+        # 檢查訊息內容包含「降價至預算範圍」
+        # 有圖片時使用 caption，沒有圖片時使用 text
+        call_data = mock_post.call_args[1]["json"]
+        message_text = call_data.get("caption") or call_data.get("text", "")
+        self.assertIn("降價至預算範圍", message_text)
+
+    @patch("src.notifier.requests.post")
+    def test_notify_price_drop_within_budget(self, mock_post):
+        """測試通知預算內商品降價（保持原樣）"""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        notifier = TelegramNotifier()
+        product = {
+            "id": "test123",
+            "title": "測試商品",
+            "price_jpy": 800,  # 新價格
+            "price_twd": 300,  # 新價格在預算內
+            "image_url": "https://example.com/image.jpg",
+            "product_url": "https://example.com/product",
+        }
+
+        # 原本價格 400 TWD（也在預算內），現在降到 300 TWD
+        result = notifier.notify_price_drop(
+            product, old_price_jpy=1000, old_price_twd=400, max_ntd=500
+        )
+        self.assertTrue(result)
+        mock_post.assert_called_once()
+
+        # 檢查訊息內容包含「價格降低」（不是「降價至預算範圍」）
+        # 有圖片時使用 caption，沒有圖片時使用 text
+        call_data = mock_post.call_args[1]["json"]
+        message_text = call_data.get("caption") or call_data.get("text", "")
+        self.assertIn("價格降低", message_text)
+        self.assertNotIn("降價至預算範圍", message_text)
+
 
 if __name__ == "__main__":
     unittest.main()
-

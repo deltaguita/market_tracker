@@ -117,6 +117,9 @@ class TestProductStorage(unittest.TestCase):
         self.assertEqual(len(result["new"]), 0)
         self.assertEqual(len(result["price_dropped"]), 1)
         self.assertEqual(result["price_dropped"][0]["old_price_jpy"], 1000)
+        # 驗證 old_price_twd 是否正確返回
+        self.assertIn("old_price_twd", result["price_dropped"][0])
+        self.assertEqual(result["price_dropped"][0]["old_price_twd"], 200)
 
     def test_compare_products_no_price_drop(self):
         """測試比較商品 - 價格未降低（不應該觸發通知）"""

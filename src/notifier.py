@@ -34,7 +34,7 @@ class TelegramNotifier:
             print(f"Failed to send Telegram message: {e}")
             return False
 
-    def notify_new_product(self, product: Dict):
+    def notify_new_product(self, product: Dict, is_within_budget: bool = False):
         """通知新商品上架"""
         price_jpy = product.get("price_jpy", 0)
         price_twd = product.get("price_twd", 0)
@@ -48,18 +48,29 @@ class TelegramNotifier:
 
         price_str = "\n".join(price_lines) if price_lines else "價格未標示"
 
+        # 根據是否在預算內選擇不同的標題
+        title = "有預算內目標商品上架" if is_within_budget else "新商品上架"
+
         message = (
-            f"<b>新商品上架</b>\n\n"
+            f"<b>{title}</b>\n\n"
             f"<b>{product['title']}</b>\n"
             f"{price_str}\n"
             f'<a href="{product["product_url"]}">查看商品</a>'
         )
         return self._send_message(message, product.get("image_url"))
 
-    def notify_price_drop(self, product: Dict, old_price_jpy: int):
+    def notify_price_drop(
+        self, product: Dict, old_price_jpy: int, old_price_twd: int = None, max_ntd: int = None
+    ):
         """通知價格降低（只以日幣價格作為比價基準）"""
         price_jpy = product.get("price_jpy", 0)
         price_twd = product.get("price_twd", 0)
+
+        # 判斷是否從超過預算降到預算內
+        dropped_to_budget = False
+        if max_ntd is not None and old_price_twd is not None:
+            if old_price_twd > max_ntd and price_twd <= max_ntd:
+                dropped_to_budget = True
 
         # 計算降價資訊（只以日幣價格計算，避免匯率變動造成的誤判）
         drop_str = ""
@@ -93,27 +104,50 @@ class TelegramNotifier:
 
         price_str = "\n".join(price_lines) if price_lines else "價格未標示"
 
+        # 根據情況選擇標題
+        if dropped_to_budget:
+            title = "降價至預算範圍"
+        else:
+            title = "價格降低"
+
         message = (
-            f"<b>價格降低</b>\n\n"
+            f"<b>{title}</b>\n\n"
             f"<b>{product['title']}</b>\n"
             f"{price_str}\n"
             f'<a href="{product["product_url"]}">查看商品</a>'
         )
         return self._send_message(message, product.get("image_url"))
 
-    def notify_batch(self, new_products: List[Dict], price_dropped: List[Dict]):
+    def notify_batch(
+        self,
+        new_products: List[Dict],
+        price_dropped: List[Dict],
+        max_ntd: int = None,
+        price_dropped_with_old_twd: List[Dict] = None,
+    ):
         """批次通知"""
         success_count = 0
         total_count = len(new_products) + len(price_dropped)
 
+        # 使用 price_dropped_with_old_twd 如果提供，否則使用 price_dropped
+        price_dropped_list = price_dropped_with_old_twd if price_dropped_with_old_twd else price_dropped
+
         for product in new_products:
-            if self.notify_new_product(product):
+            # 檢查是否在預算內
+            is_within_budget = False
+            if max_ntd is not None:
+                price_twd = product.get("price_twd", 0)
+                is_within_budget = price_twd > 0 and price_twd <= max_ntd
+
+            if self.notify_new_product(product, is_within_budget=is_within_budget):
                 success_count += 1
 
-        for item in price_dropped:
+        for item in price_dropped_list:
             product = item["product"]
-            # 只傳遞日幣價格作為比價基準
-            if self.notify_price_drop(product, item["old_price_jpy"]):
+            old_price_jpy = item["old_price_jpy"]
+            old_price_twd = item.get("old_price_twd")
+
+            if self.notify_price_drop(product, old_price_jpy, old_price_twd, max_ntd):
                 success_count += 1
 
         return success_count, total_count
