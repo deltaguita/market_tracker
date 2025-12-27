@@ -1,9 +1,11 @@
 # Market Tracker
-商品追蹤系統
+免 server 商品追蹤系統，
 
 ## 簡介
 
-自動追蹤商品價格變動，透過 Telegram 發送通知。
+* 自動追蹤商品價格變動、新品上架，並透過 Telegram 發送通知。
+* 不需要架設任何 server，只需要github action runner 就能依照排程執行。
+* 費用：0
 
 ## 設定
 
