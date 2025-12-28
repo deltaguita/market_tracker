@@ -225,3 +225,50 @@ jobs:
           name: products-db-${{ matrix.url_index }}
           path: data/products.db
           retention-days: 1
+
+  # 通知 workflow 失敗
+  notify-on-failure:
+    needs: [test, update-exchange-rate, track, finalize]
+    runs-on: ubuntu-latest
+    if: always() && (needs.test.result == 'failure' || needs.update-exchange-rate.result == 'failure' || needs.track.result == 'failure' || needs.finalize.result == 'failure')
+    steps:
+      - name: Determine failed jobs
+        id: failed-jobs
+        run: |
+          FAILED_JOBS=""
+          if [ "${{ needs.test.result }}" == "failure" ]; then
+            FAILED_JOBS="${FAILED_JOBS}• 測試失敗%0A"
+          fi
+          if [ "${{ needs.update-exchange-rate.result }}" == "failure" ]; then
+            FAILED_JOBS="${FAILED_JOBS}• 更新匯率失敗%0A"
+          fi
+          if [ "${{ needs.track.result }}" == "failure" ]; then
+            FAILED_JOBS="${FAILED_JOBS}• 商品追蹤失敗%0A"
+          fi
+          if [ "${{ needs.finalize.result }}" == "failure" ]; then
+            FAILED_JOBS="${FAILED_JOBS}• 資料合併/提交失敗%0A"
+          fi
+          echo "failed_jobs=${FAILED_JOBS}" >> $GITHUB_OUTPUT
+
+      - name: Send Telegram notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          WORKFLOW_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          FAILED_JOBS="${{ steps.failed-jobs.outputs.failed_jobs }}"
+          
+          MESSAGE="❌ <b>Workflow 執行失敗</b>%0A%0A"
+          MESSAGE="${MESSAGE}Repository: ${{ github.repository }}%0A"
+          MESSAGE="${MESSAGE}Workflow: ${{ github.workflow }}%0A"
+          MESSAGE="${MESSAGE}Run ID: ${{ github.run_id }}%0A"
+          MESSAGE="${MESSAGE}Commit: ${{ github.sha }}%0A"
+          MESSAGE="${MESSAGE}觸發方式: ${{ github.event_name }}%0A%0A"
+          MESSAGE="${MESSAGE}<b>失敗的 Job：</b>%0A${FAILED_JOBS}%0A"
+          MESSAGE="${MESSAGE}<a href=\"${WORKFLOW_URL}\">查看詳細資訊</a>"
+          
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            -d "text=${MESSAGE}" \
+            -d "parse_mode=HTML" \
+            -d "disable_web_page_preview=false" || echo "Failed to send notification"
