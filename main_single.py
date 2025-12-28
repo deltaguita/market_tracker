@@ -39,18 +39,18 @@ def main():
         print(f"URL index {url_index} out of range (total: {len(tracking_urls)})")
         return
 
-        # 獲取要處理的 URL
-        url_config = tracking_urls[url_index]
-        name = url_config.get("name", "Unknown")
-        url = url_config.get("url")
-        max_ntd = url_config.get("max_ntd")  # 可選的台幣價格門檻
+    # 獲取要處理的 URL
+    url_config = tracking_urls[url_index]
+    name = url_config.get("name", "Unknown")
+    url = url_config.get("url")
+    max_ntd = url_config.get("max_ntd")  # 可選的台幣價格門檻
 
-        if not url:
-            print(f"Skipping {name}: No URL provided")
-            return
+    if not url:
+        print(f"Skipping {name}: No URL provided")
+        return
 
-        if max_ntd is not None:
-            print(f"Max NTD threshold: {max_ntd}")
+    if max_ntd is not None:
+        print(f"Max NTD threshold: {max_ntd}")
 
     print(f"\n{'='*60}")
     print(f"Processing: {name} (Index: {url_index})")
