@@ -10,7 +10,8 @@
     },
     {
       "name": "KRD-703T",
-      "url": "https://jp.mercari.com/zh-TW/search?keyword=KRD-703T&sort=created_time&order=desc&status=on_sale"
+      "url": "https://jp.mercari.com/zh-TW/search?keyword=KRD-703T&sort=created_time&order=desc&status=on_sale",
+      "max_ntd": 3500
     }
   ]
 }
