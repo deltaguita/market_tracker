@@ -163,13 +163,34 @@ jobs:
         run: |
           git config --local user.email "deltaguita@gmail.com"
           git config --local user.name "deltaguita"
-          git pull --rebase || true
+          # 先 fetch 遠端變更
+          git fetch origin
+          # 暫存變更
           git add data/products.db data/exchange_rate.db
+          # 如果有變更，先 commit
           if ! git diff --staged --quiet; then
             git commit -m "Update product data and exchange rate [skip ci]"
-            git push
+          fi
+          # 拉取遠端變更並 rebase（如果有新的 commit）
+          if [ -n "$(git log HEAD..origin/main)" ]; then
+            git pull --rebase origin main || {
+              echo "Rebase failed, resetting and using merge strategy"
+              git rebase --abort 2>/dev/null || true
+              # 如果 rebase 失敗，使用 merge（保留我們的變更）
+              git merge origin/main -X ours -m "Merge remote changes [skip ci]" || {
+                echo "Merge also failed, forcing push (database files should take precedence)"
+                git reset --hard HEAD
+                git pull origin main --no-rebase || true
+                git add data/products.db data/exchange_rate.db
+                git commit -m "Update product data and exchange rate [skip ci]" || true
+              }
+            }
+          fi
+          # Push 變更
+          if [ -n "$(git log origin/main..HEAD)" ]; then
+            git push origin main
           else
-            echo "No changes to commit"
+            echo "No changes to push"
           fi
 
   # 並行處理每個 URL
