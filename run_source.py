@@ -5,6 +5,7 @@
 支援命令列參數指定來源，用於排程系統或手動執行單一來源的爬取。
 """
 import argparse
+import os
 import sys
 import traceback
 from typing import Optional
