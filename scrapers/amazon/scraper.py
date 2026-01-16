@@ -628,7 +628,8 @@ class AmazonScraper(BaseScraper):
         color_selectors = [
             "#variation_color_name li",
             "#variation_color_name ul li",
-            "#twister-plus-inline-twister-card",
+            "#twister-plus-inline-twister-card li.dimension-value-list-item-square-image",
+            "#twister-plus-inline-twister-card li",
             "[data-action='variationSelect'] li",
             "#tp-inline-twister-dim-values-container li",
         ]
@@ -763,11 +764,20 @@ class AmazonScraper(BaseScraper):
             if variant_asin and variant_asin != base_asin:
                 variant_id = f"{variant_asin}_{variant_identifier}"
             
-            # 提取變體價格
-            variant_price = self._get_variant_price(element)
+            # 點擊變體以更新頁面價格（如果需要）
+            try:
+                if element.is_visible():
+                    element.click()
+                    time.sleep(1)  # 等待頁面更新價格
+            except Exception:
+                pass  # 如果點擊失敗，繼續使用當前價格
+            
+            # 提取變體價格（點擊後從頁面提取）
+            variant_price = self._extract_price()
+            
+            # 如果還是沒有價格，嘗試從元素本身提取
             if variant_price is None:
-                # 如果無法從元素提取，使用頁面上的當前價格
-                variant_price = self._extract_price()
+                variant_price = self._get_variant_price(element)
             
             # 提取變體圖片
             variant_image = self._get_variant_image(element) or base_image

@@ -3,58 +3,107 @@
 
 支援各來源獨立的排程設定，記錄和讀取上次執行時間，
 並判斷是否到達下次執行時間。
+
+使用資料庫儲存排程狀態，與 products.db 一起管理。
 """
 
-import json
+import sqlite3
 import os
 from datetime import datetime, timedelta
 from typing import Optional, Dict
 
 
-# 預設的排程狀態檔案路徑
-DEFAULT_SCHEDULE_FILE = "data/schedule_state.json"
+# 預設的排程狀態資料庫路徑
+DEFAULT_SCHEDULE_DB = "data/products.db"
 
 
-def _load_schedule_state(schedule_file: str = DEFAULT_SCHEDULE_FILE) -> Dict:
+def _ensure_schedule_table(db_path: str = DEFAULT_SCHEDULE_DB) -> None:
     """
-    載入排程狀態檔案
+    確保 schedule_state 表存在
     
     Args:
-        schedule_file: 排程狀態檔案路徑
+        db_path: 資料庫路徑
+    """
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS schedule_state (
+                source TEXT PRIMARY KEY,
+                last_run_time TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _load_schedule_state(db_path: str = DEFAULT_SCHEDULE_DB) -> Dict:
+    """
+    從資料庫載入排程狀態
+    
+    Args:
+        db_path: 資料庫路徑
     
     Returns:
         Dict: 排程狀態資料，格式為 {source: {"last_run_time": ISO8601 string}}
     """
-    if os.path.exists(schedule_file):
-        try:
-            with open(schedule_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            return {}
-    return {}
+    _ensure_schedule_table(db_path)
+    
+    if not os.path.exists(db_path):
+        return {}
+    
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT source, last_run_time FROM schedule_state")
+        rows = cursor.fetchall()
+        
+        state = {}
+        for source, last_run_time in rows:
+            state[source] = {"last_run_time": last_run_time}
+        
+        return state
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
 
 
 def _save_schedule_state(
     state: Dict, 
-    schedule_file: str = DEFAULT_SCHEDULE_FILE
+    db_path: str = DEFAULT_SCHEDULE_DB
 ) -> None:
     """
-    儲存排程狀態檔案
+    儲存排程狀態到資料庫
     
     Args:
         state: 排程狀態資料
-        schedule_file: 排程狀態檔案路徑
+        db_path: 資料庫路徑
     """
-    # 確保目錄存在
-    os.makedirs(os.path.dirname(schedule_file), exist_ok=True)
+    _ensure_schedule_table(db_path)
     
-    with open(schedule_file, 'w', encoding='utf-8') as f:
-        json.dump(state, f, indent=2, ensure_ascii=False)
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    try:
+        cursor = conn.cursor()
+        for source, source_state in state.items():
+            last_run_time = source_state.get("last_run_time")
+            if last_run_time:
+                cursor.execute(
+                    """INSERT OR REPLACE INTO schedule_state 
+                       (source, last_run_time) 
+                       VALUES (?, ?)""",
+                    (source, last_run_time)
+                )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_last_run_time(
     source: str,
-    schedule_file: str = DEFAULT_SCHEDULE_FILE
+    schedule_file: str = DEFAULT_SCHEDULE_DB
 ) -> Optional[datetime]:
     """
     取得指定來源的上次執行時間
@@ -81,7 +130,7 @@ def get_last_run_time(
 def record_run_time(
     source: str,
     run_time: Optional[datetime] = None,
-    schedule_file: str = DEFAULT_SCHEDULE_FILE
+    schedule_file: str = DEFAULT_SCHEDULE_DB
 ) -> None:
     """
     記錄指定來源的執行時間
@@ -107,7 +156,7 @@ def record_run_time(
 def is_due_for_scraping(
     source: str,
     interval_hours: int,
-    schedule_file: str = DEFAULT_SCHEDULE_FILE,
+    schedule_file: str = DEFAULT_SCHEDULE_DB,
     current_time: Optional[datetime] = None
 ) -> bool:
     """
@@ -149,7 +198,7 @@ def is_due_for_scraping(
 def get_next_run_time(
     source: str,
     interval_hours: int,
-    schedule_file: str = DEFAULT_SCHEDULE_FILE
+    schedule_file: str = DEFAULT_SCHEDULE_DB
 ) -> Optional[datetime]:
     """
     取得指定來源的下次預計執行時間
@@ -173,7 +222,7 @@ def get_next_run_time(
 def get_time_until_next_run(
     source: str,
     interval_hours: int,
-    schedule_file: str = DEFAULT_SCHEDULE_FILE,
+    schedule_file: str = DEFAULT_SCHEDULE_DB,
     current_time: Optional[datetime] = None
 ) -> Optional[timedelta]:
     """
@@ -203,22 +252,26 @@ def get_time_until_next_run(
 
 def clear_schedule_state(
     source: Optional[str] = None,
-    schedule_file: str = DEFAULT_SCHEDULE_FILE
+    schedule_file: str = DEFAULT_SCHEDULE_DB
 ) -> None:
     """
     清除排程狀態
     
     Args:
         source: 來源名稱，若為 None 則清除所有來源的狀態
-        schedule_file: 排程狀態檔案路徑
+        schedule_file: 資料庫路徑
     """
-    if source is None:
-        # 清除整個檔案
-        if os.path.exists(schedule_file):
-            os.remove(schedule_file)
-    else:
-        # 只清除指定來源的狀態
-        state = _load_schedule_state(schedule_file)
-        if source in state:
-            del state[source]
-            _save_schedule_state(state, schedule_file)
+    _ensure_schedule_table(schedule_file)
+    
+    conn = sqlite3.connect(schedule_file, timeout=30.0)
+    try:
+        cursor = conn.cursor()
+        if source is None:
+            # 清除所有來源的狀態
+            cursor.execute("DELETE FROM schedule_state")
+        else:
+            # 只清除指定來源的狀態
+            cursor.execute("DELETE FROM schedule_state WHERE source = ?", (source,))
+        conn.commit()
+    finally:
+        conn.close()
