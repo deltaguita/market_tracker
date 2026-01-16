@@ -1,0 +1,20 @@
+{
+  "source": "mercari_jp",
+  "schedule_interval_hours": 4,
+  "price_tracking_mode": "latest_only",
+  "tracking_urls": [
+    {
+      "name": "レキ FX",
+      "url": "https://jp.mercari.com/zh-TW/search?keyword=%E3%83%AC%E3%82%AD%20FX"
+    },
+    {
+      "name": "ADV SKIN 12",
+      "url": "https://jp.mercari.com/search?keyword=ADV%20SKIN%2012&order=asc&sort=price&status=on_sale"
+    },
+    {
+      "name": "Mammut Trion Nordwand",
+      "url": "https://jp.mercari.com/search?keyword=MAMMUT%20%E3%83%88%E3%83%AA%E3%82%AA%E3%83%B3&status=on_sale",
+      "max_ntd": 3000
+    }
+  ]
+}

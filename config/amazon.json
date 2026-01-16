@@ -1,0 +1,12 @@
+{
+  "source": "amazon_us",
+  "schedule_interval_hours": 8,
+  "price_tracking_mode": "full_history",
+  "tracking_urls": [
+    {
+      "name": "Zippo Hand Warmer",
+      "url": "https://www.amazon.com/gp/product/B013HLGTL2",
+      "max_usd": 20.00
+    }
+  ]
+}
