@@ -76,19 +76,20 @@ class DatabaseMigrator:
                 SELECT name FROM sqlite_master 
                 WHERE type='table' AND name='schema_version'
             """)
-            if cursor.fetchone():
+            schema_version_exists = cursor.fetchone() is not None
+            
+            if schema_version_exists:
                 # 讀取最新版本
                 cursor.execute(
                     "SELECT MAX(version) FROM schema_version"
                 )
                 result = cursor.fetchone()
-                conn.close()
                 if result and result[0] is not None:
+                    conn.close()
                     logger.debug(f"Detected schema version from table: {result[0]}")
                     return result[0]
-                # 表存在但沒有記錄，視為 V0
-                logger.debug("schema_version table exists but empty, treating as V0")
-                return 0
+                # 表存在但沒有記錄，繼續檢查 products 表結構
+                logger.debug("schema_version table exists but empty, checking products table structure")
             
             # 2. 檢查 products 表是否存在
             cursor.execute("""
@@ -321,10 +322,28 @@ class DatabaseMigrator:
         """
         建立 V2 schema（products 表和 price_history 表及索引）
         
+        如果 products 表已存在但結構不是 V2，會先刪除舊表再重建。
+        
         Args:
             conn: 資料庫連線
         """
         cursor = conn.cursor()
+        
+        # 檢查 products 表是否存在及其結構
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='products'
+        """)
+        products_exists = cursor.fetchone() is not None
+        
+        if products_exists:
+            # 檢查表結構是否為 V2
+            cursor.execute("PRAGMA table_info(products)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "source" not in columns:
+                # 表存在但不是 V2，需要先刪除
+                logger.warning("Products table exists but is not V2 schema, dropping and recreating")
+                cursor.execute("DROP TABLE products")
         
         # 建立 products 表（V2 schema）
         cursor.execute("""

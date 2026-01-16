@@ -33,7 +33,7 @@ jobs:
               "mercari_jp": "mercari.json"
           }
           matrix_items = []
-          
+
           for source, config_filename in source_to_file.items():
               config_file = f"config/{config_filename}"
               if not os.path.exists(config_file):
