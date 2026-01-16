@@ -4,8 +4,6 @@ on:
   schedule:
     # 每 2 小時執行一次，台灣時間 08:00-24:00（UTC 00:00-16:00）
     - cron: "0 0,2,4,6,8,10,12,14,16 * * *"
-    branches:
-      - main  # 排程只在 main 分支執行
   workflow_dispatch: # 允許手動觸發，可在任何分支執行
 
 jobs:
