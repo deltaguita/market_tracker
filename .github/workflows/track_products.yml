@@ -7,9 +7,6 @@ on:
     branches:
       - main  # 排程只在 main 分支執行
   workflow_dispatch: # 允許手動觸發，可在任何分支執行
-    branches:
-      - main
-      - feature/**  # 允許在 feature 分支執行
 
 jobs:
   # 準備階段：讀取 URLs 並生成 matrix
