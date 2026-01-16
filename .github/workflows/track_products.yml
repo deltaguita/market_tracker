@@ -27,11 +27,15 @@ jobs:
           import os
 
           # 讀取所有來源的配置
-          sources = ["amazon_us", "mercari_jp"]
+          # 來源名稱到配置檔名的映射
+          source_to_file = {
+              "amazon_us": "amazon.json",
+              "mercari_jp": "mercari.json"
+          }
           matrix_items = []
           
-          for source in sources:
-              config_file = f"config/{source}.json"
+          for source, config_filename in source_to_file.items():
+              config_file = f"config/{config_filename}"
               if not os.path.exists(config_file):
                   print(f"Config file {config_file} not found, skipping {source}")
                   continue
@@ -51,7 +55,7 @@ jobs:
                       "url_index": i,
                       "url_name": url.get("name", f"{source}-{i}")
                   })
-          
+
           if not matrix_items:
               print("No URLs found in any source")
               exit(1)
