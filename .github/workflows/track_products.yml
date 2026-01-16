@@ -19,28 +19,42 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Generate matrix from URLs
+      - name: Generate matrix from sources
         id: set-matrix
         run: |
           python3 << 'EOF'
           import json
           import os
 
-          with open('config/urls.json', 'r', encoding='utf-8') as f:
-              config = json.load(f)
-
-          urls = config.get('tracking_urls', [])
-          if not urls:
-              print("No URLs found")
-              exit(1)
-
-          # 生成 matrix，每個 URL 一個 job
+          # 讀取所有來源的配置
+          sources = ["amazon_us", "mercari_jp"]
           matrix_items = []
-          for i, url in enumerate(urls):
-              matrix_items.append({
-                  "url_index": i,
-                  "url_name": url.get("name", f"URL-{i}")
-              })
+          
+          for source in sources:
+              config_file = f"config/{source}.json"
+              if not os.path.exists(config_file):
+                  print(f"Config file {config_file} not found, skipping {source}")
+                  continue
+              
+              with open(config_file, 'r', encoding='utf-8') as f:
+                  config = json.load(f)
+              
+              urls = config.get('tracking_urls', [])
+              if not urls:
+                  print(f"No URLs found for {source}, skipping")
+                  continue
+              
+              # 為每個 URL 生成一個 job
+              for i, url in enumerate(urls):
+                  matrix_items.append({
+                      "source": source,
+                      "url_index": i,
+                      "url_name": url.get("name", f"{source}-{i}")
+                  })
+          
+          if not matrix_items:
+              print("No URLs found in any source")
+              exit(1)
 
           matrix = {"include": matrix_items}
 
@@ -250,18 +264,19 @@ jobs:
           echo "Waiting ${DELAY} seconds before starting..."
           sleep ${DELAY}
 
-      - name: Run tracker for ${{ matrix.url_name }}
+      - name: Run tracker for ${{ matrix.url_name }} (${{ matrix.source }})
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SOURCE: ${{ matrix.source }}
           URL_INDEX: ${{ matrix.url_index }}
         run: |
-          python main_single.py
+          python run_source.py ${{ matrix.source }} --force
 
       - name: Upload products database as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: products-db-${{ matrix.url_index }}
+          name: products-db-${{ matrix.source }}-${{ matrix.url_index }}
           path: data/products.db
           retention-days: 1
 

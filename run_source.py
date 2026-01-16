@@ -114,7 +114,22 @@ def run_source(
     all_price_dropped = []
     
     # 處理每個追蹤 URL
-    for url_config in config.tracking_urls:
+    # 如果設定了 URL_INDEX 環境變數，只處理該 index 的 URL
+    url_index_filter = os.getenv("URL_INDEX")
+    urls_to_process = config.tracking_urls
+    
+    if url_index_filter is not None:
+        try:
+            url_index = int(url_index_filter)
+            if 0 <= url_index < len(config.tracking_urls):
+                urls_to_process = [config.tracking_urls[url_index]]
+                print(f"Processing only URL at index {url_index}: {urls_to_process[0].name}")
+            else:
+                print(f"URL_INDEX {url_index} out of range (0-{len(config.tracking_urls)-1}), processing all URLs")
+        except ValueError:
+            print(f"Invalid URL_INDEX '{url_index_filter}', processing all URLs")
+    
+    for url_config in urls_to_process:
         name = url_config.name
         url = url_config.url
         max_threshold = get_max_threshold(url_config, source)
