@@ -10,54 +10,19 @@ import traceback
 from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 
-from core.config import load_source_config, load_all_configs, SourceConfig
+from core.config import (
+    load_source_config,
+    load_all_configs,
+    SourceConfig,
+    get_scraper_for_source,
+    get_max_threshold,
+)
 from core.scheduler import is_due_for_scraping, record_run_time
 from core.storage import ProductStorage
 from core.notifier import TelegramNotifier
 
 # 載入 .env 檔案
 load_dotenv()
-
-
-def get_scraper_for_source(source: str, headless: bool = True):
-    """
-    根據來源名稱取得對應的爬蟲實例
-    
-    Args:
-        source: 來源名稱 (amazon_us, mercari_jp)
-        headless: 是否以無頭模式運行瀏覽器
-    
-    Returns:
-        對應的爬蟲實例
-    
-    Raises:
-        ValueError: 當來源名稱無效時
-    """
-    if source == "amazon_us":
-        from scrapers.amazon.scraper import AmazonScraper
-        return AmazonScraper(headless=headless)
-    elif source == "mercari_jp":
-        from scrapers.mercari.scraper import MercariScraper
-        return MercariScraper(headless=headless, fetch_product_names=True)
-    else:
-        raise ValueError(f"Unknown source: {source}")
-
-
-def get_max_threshold(url_config: Dict, source: str) -> Optional[float]:
-    """
-    取得價格上限門檻
-    
-    Args:
-        url_config: URL 設定字典
-        source: 來源名稱
-    
-    Returns:
-        價格上限（USD for amazon_us, NTD for mercari_jp）
-    """
-    if source == "amazon_us":
-        return url_config.get("max_usd")
-    else:
-        return url_config.get("max_ntd")
 
 
 def filter_products_by_threshold(
@@ -156,7 +121,7 @@ def process_source(
     for url_config in config.tracking_urls:
         name = url_config.name
         url = url_config.url
-        max_threshold = get_max_threshold(url_config.__dict__, source)
+        max_threshold = get_max_threshold(url_config, source)
         
         if not url:
             print(f"Skipping {name}: No URL provided")

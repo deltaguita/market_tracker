@@ -4,7 +4,13 @@
 from .base_scraper import BaseScraper
 from .notifier import TelegramNotifier
 from .storage import ProductStorage
-from .config import load_source_config, load_all_configs, SourceConfig
+from .config import (
+    load_source_config,
+    load_all_configs,
+    SourceConfig,
+    get_scraper_for_source,
+    get_max_threshold,
+)
 from .scheduler import (
     is_due_for_scraping,
     get_last_run_time,
@@ -21,6 +27,8 @@ __all__ = [
     'load_source_config',
     'load_all_configs',
     'SourceConfig',
+    'get_scraper_for_source',
+    'get_max_threshold',
     'is_due_for_scraping',
     'get_last_run_time',
     'record_run_time',

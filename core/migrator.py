@@ -8,7 +8,7 @@ Designed to be lightweight and simple, without external ORM dependencies.
 import sqlite3
 import logging
 from datetime import datetime
-from typing import Dict, Callable, Optional
+from typing import Dict, Callable, List
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,26 @@ class DatabaseMigrator:
         """註冊所有遷移腳本"""
         self._migrations[2] = self._migrate_v1_to_v2
 
+    def _table_exists(self, conn: sqlite3.Connection, table_name: str) -> bool:
+        """檢查表是否存在"""
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name=?
+        """,
+            (table_name,),
+        )
+        return cursor.fetchone() is not None
+
+    def _get_table_columns(
+        self, conn: sqlite3.Connection, table_name: str
+    ) -> List[str]:
+        """取得表的所有欄位名稱"""
+        cursor = conn.cursor()
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        return [row[1] for row in cursor.fetchall()]
+
     def get_current_version(self) -> int:
         """
         取得當前 schema 版本
@@ -70,53 +90,38 @@ class DatabaseMigrator:
             VersionDetectionError: 無法檢測版本時
         """
         try:
-            conn = sqlite3.connect(self.db_path, timeout=30.0)
-            cursor = conn.cursor()
+            with sqlite3.connect(self.db_path, timeout=30.0) as conn:
+                cursor = conn.cursor()
 
-            # 1. 檢查 schema_version 表是否存在
-            cursor.execute("""
-                SELECT name FROM sqlite_master 
-                WHERE type='table' AND name='schema_version'
-            """)
-            schema_version_exists = cursor.fetchone() is not None
+                # 1. 檢查 schema_version 表是否存在
+                if self._table_exists(conn, "schema_version"):
+                    # 讀取最新版本
+                    cursor.execute("SELECT MAX(version) FROM schema_version")
+                    result = cursor.fetchone()
+                    if result and result[0] is not None:
+                        logger.debug(f"Detected schema version from table: {result[0]}")
+                        return result[0]
+                    # 表存在但沒有記錄，繼續檢查 products 表結構
+                    logger.debug(
+                        "schema_version table exists but empty, checking products table structure"
+                    )
 
-            if schema_version_exists:
-                # 讀取最新版本
-                cursor.execute("SELECT MAX(version) FROM schema_version")
-                result = cursor.fetchone()
-                if result and result[0] is not None:
-                    conn.close()
-                    logger.debug(f"Detected schema version from table: {result[0]}")
-                    return result[0]
-                # 表存在但沒有記錄，繼續檢查 products 表結構
-                logger.debug(
-                    "schema_version table exists but empty, checking products table structure"
-                )
+                # 2. 檢查 products 表是否存在
+                if self._table_exists(conn, "products"):
+                    # 檢查是否有 source 欄位
+                    columns = self._get_table_columns(conn, "products")
+                    if "source" in columns:
+                        # 有 source 欄位 → V2
+                        logger.debug("Detected V2 schema (has source column)")
+                        return 2
+                    else:
+                        # 沒有 source 欄位 → V1
+                        logger.debug("Detected V1 schema (no source column)")
+                        return 1
 
-            # 2. 檢查 products 表是否存在
-            cursor.execute("""
-                SELECT name FROM sqlite_master 
-                WHERE type='table' AND name='products'
-            """)
-            if cursor.fetchone():
-                # 檢查是否有 source 欄位
-                cursor.execute("PRAGMA table_info(products)")
-                columns = [row[1] for row in cursor.fetchall()]
-                conn.close()
-
-                if "source" in columns:
-                    # 有 source 欄位 → V2
-                    logger.debug("Detected V2 schema (has source column)")
-                    return 2
-                else:
-                    # 沒有 source 欄位 → V1
-                    logger.debug("Detected V1 schema (no source column)")
-                    return 1
-
-            # 3. 都不存在 → V0（全新資料庫）
-            conn.close()
-            logger.debug("No existing tables, treating as V0 (fresh database)")
-            return 0
+                # 3. 都不存在 → V0（全新資料庫）
+                logger.debug("No existing tables, treating as V0 (fresh database)")
+                return 0
 
         except sqlite3.Error as e:
             raise VersionDetectionError(f"Failed to detect schema version: {e}")
@@ -262,21 +267,14 @@ class DatabaseMigrator:
         cursor = conn.cursor()
 
         # 檢查 products 表是否存在
-        cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name='products'
-        """)
-        products_exists = cursor.fetchone() is not None
-
-        if not products_exists:
+        if not self._table_exists(conn, "products"):
             # 如果 products 表不存在，直接建立 V2 schema
             logger.info("Products table does not exist, creating V2 schema directly")
             self._create_v2_schema(conn)
             return
 
         # 檢查是否已經是 V2 schema
-        cursor.execute("PRAGMA table_info(products)")
-        columns = [row[1] for row in cursor.fetchall()]
+        columns = self._get_table_columns(conn, "products")
         if "source" in columns:
             logger.info("Products table already has V2 schema, skipping migration")
             return
@@ -334,16 +332,9 @@ class DatabaseMigrator:
         cursor = conn.cursor()
 
         # 檢查 products 表是否存在及其結構
-        cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name='products'
-        """)
-        products_exists = cursor.fetchone() is not None
-
-        if products_exists:
+        if self._table_exists(conn, "products"):
             # 檢查表結構是否為 V2
-            cursor.execute("PRAGMA table_info(products)")
-            columns = [row[1] for row in cursor.fetchall()]
+            columns = self._get_table_columns(conn, "products")
             if "source" not in columns:
                 # 表存在但不是 V2，這不應該發生
                 # 應該透過 _migrate_v1_to_v2() 進行遷移

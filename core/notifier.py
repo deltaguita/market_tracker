@@ -5,6 +5,7 @@
 """
 
 import os
+import time
 import requests
 from typing import Dict, List, Optional
 
@@ -41,6 +42,62 @@ class TelegramNotifier:
         except Exception as e:
             print(f"Failed to send Telegram message: {e}")
             return False
+
+    def send_photo_file(self, photo_path: str, caption: str = "") -> bool:
+        """
+        發送本地圖片檔案到 Telegram
+        
+        Args:
+            photo_path: 圖片檔案路徑
+            caption: 圖片說明文字
+        
+        Returns:
+            是否發送成功
+        """
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendPhoto"
+        
+        try:
+            with open(photo_path, "rb") as photo:
+                files = {"photo": photo}
+                data = {
+                    "chat_id": self.chat_id,
+                    "caption": caption,
+                    "parse_mode": "HTML",
+                }
+                response = requests.post(url, files=files, data=data, timeout=30)
+                response.raise_for_status()
+                return True
+        except FileNotFoundError:
+            print(f"Photo file not found: {photo_path}")
+            return False
+        except Exception as e:
+            print(f"Failed to send photo file: {e}")
+            return False
+
+    def notify_timeout_error(
+        self, source: str, url: str, error_message: str, screenshot_path: str
+    ) -> bool:
+        """
+        通知 timeout 錯誤，包含截圖
+        
+        Args:
+            source: 來源名稱
+            url: 發生錯誤的 URL
+            error_message: 錯誤訊息
+            screenshot_path: 截圖檔案路徑
+        
+        Returns:
+            是否發送成功
+        """
+        source_display = self._get_source_display_name(source)
+        message = (
+            f"<b>⚠️ Timeout 錯誤</b> [{source_display}]\n\n"
+            f"<b>URL:</b> {url}\n"
+            f"<b>錯誤:</b> {error_message}\n"
+            f"<b>時間:</b> {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        
+        return self.send_photo_file(screenshot_path, message)
 
     def _format_price(self, product: Dict, source: str) -> str:
         """

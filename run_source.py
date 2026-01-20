@@ -9,10 +9,14 @@ import argparse
 import os
 import sys
 import traceback
-from typing import Optional
 from dotenv import load_dotenv
 
-from core.config import load_source_config, SOURCE_TO_CONFIG_FILE
+from core.config import (
+    load_source_config,
+    SOURCE_TO_CONFIG_FILE,
+    get_scraper_for_source,
+    get_max_threshold,
+)
 from core.scheduler import (
     is_due_for_scraping,
     record_run_time,
@@ -24,37 +28,6 @@ from core.notifier import TelegramNotifier
 
 # 載入 .env 檔案
 load_dotenv()
-
-
-def get_scraper_for_source(source: str, headless: bool = True):
-    """
-    根據來源名稱取得對應的爬蟲實例
-
-    Args:
-        source: 來源名稱 (amazon_us, mercari_jp)
-        headless: 是否以無頭模式運行瀏覽器
-
-    Returns:
-        對應的爬蟲實例
-    """
-    if source == "amazon_us":
-        from scrapers.amazon.scraper import AmazonScraper
-
-        return AmazonScraper(headless=headless)
-    elif source == "mercari_jp":
-        from scrapers.mercari.scraper import MercariScraper
-
-        return MercariScraper(headless=headless, fetch_product_names=True)
-    else:
-        raise ValueError(f"Unknown source: {source}")
-
-
-def get_max_threshold(url_config, source: str) -> Optional[float]:
-    """取得價格上限門檻"""
-    if source == "amazon_us":
-        return url_config.max_usd
-    else:
-        return url_config.max_ntd
 
 
 def run_source(
@@ -107,14 +80,16 @@ def run_source(
 
     # 初始化元件
     storage = ProductStorage()
-    scraper = get_scraper_for_source(source, headless=headless)
 
+    # 初始化 notifier（用於 timeout 通知，即使 dry_run 也使用）
     notifier = None
-    if not dry_run:
-        try:
-            notifier = TelegramNotifier()
-        except ValueError as e:
-            print(f"Warning: Telegram notifier not configured: {e}")
+    try:
+        notifier = TelegramNotifier()
+    except ValueError as e:
+        print(f"Warning: Telegram notifier not configured: {e}")
+
+    # 創建 scraper 並傳入 notifier（用於 timeout 通知）
+    scraper = get_scraper_for_source(source, headless=headless, notifier=notifier)
 
     all_new_products = []
     all_price_dropped = []

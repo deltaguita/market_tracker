@@ -133,3 +133,45 @@ def get_config_path(source: str, config_dir: str = "config") -> str:
     if source not in SOURCE_TO_CONFIG_FILE:
         raise ValueError(f"Unknown source: {source}")
     return os.path.join(config_dir, SOURCE_TO_CONFIG_FILE[source])
+
+
+def get_scraper_for_source(source: str, headless: bool = True, notifier=None):
+    """
+    根據來源名稱取得對應的爬蟲實例
+    
+    Args:
+        source: 來源名稱 (amazon_us, mercari_jp)
+        headless: 是否以無頭模式運行瀏覽器
+        notifier: TelegramNotifier 實例（可選，用於 timeout 通知）
+    
+    Returns:
+        對應的爬蟲實例
+    
+    Raises:
+        ValueError: 當來源名稱無效時
+    """
+    if source == "amazon_us":
+        from scrapers.amazon.scraper import AmazonScraper
+        return AmazonScraper(headless=headless, notifier=notifier)
+    elif source == "mercari_jp":
+        from scrapers.mercari.scraper import MercariScraper
+        return MercariScraper(headless=headless, fetch_product_names=True)
+    else:
+        raise ValueError(f"Unknown source: {source}")
+
+
+def get_max_threshold(url_config: TrackingUrl, source: str) -> Optional[float]:
+    """
+    取得價格上限門檻
+    
+    Args:
+        url_config: URL 設定物件 (TrackingUrl)
+        source: 來源名稱
+    
+    Returns:
+        價格上限（USD for amazon_us, NTD for mercari_jp）
+    """
+    if source == "amazon_us":
+        return url_config.max_usd
+    else:
+        return url_config.max_ntd

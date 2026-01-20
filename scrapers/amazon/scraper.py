@@ -12,6 +12,8 @@ Amazon US 爬蟲模組
 
 import re
 import time
+import os
+from datetime import datetime
 from typing import List, Dict, Optional
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
@@ -71,14 +73,16 @@ class AmazonScraper(BaseScraper):
         'customers also search',
     ]
     
-    def __init__(self, headless: bool = True):
+    def __init__(self, headless: bool = True, notifier=None):
         """
         初始化 Amazon 爬蟲
         
         Args:
             headless: 是否以無頭模式運行瀏覽器
+            notifier: TelegramNotifier 實例（可選，用於發送 timeout 通知）
         """
         super().__init__(headless=headless)
+        self.notifier = notifier
     
     @property
     def source_name(self) -> str:
@@ -158,6 +162,9 @@ class AmazonScraper(BaseScraper):
             # 設定美國地區以確保 USD 價格
             self._set_us_location()
             
+            # 確保關閉所有彈出視窗（location popover 等）
+            self._close_all_popovers()
+            
             # 等待頁面穩定
             time.sleep(2)
             
@@ -188,11 +195,60 @@ class AmazonScraper(BaseScraper):
             
             return []
             
+        except PlaywrightTimeoutError as e:
+            error_msg = str(e)
+            print(f"Error scraping Amazon page: {error_msg}")
+            # 截圖並發送通知
+            self._handle_timeout_error("scrape", error_msg, url)
+            return []
         except Exception as e:
             print(f"Error scraping Amazon page: {e}")
             return []
         finally:
             self._close_browser()
+    
+    def _handle_timeout_error(self, operation: str, error_message: str, url: str = None) -> None:
+        """
+        處理 timeout 錯誤：截圖並發送 Telegram 通知
+        
+        Args:
+            operation: 發生錯誤的操作名稱
+            error_message: 錯誤訊息
+            url: 當前 URL（可選）
+        """
+        if not self._page:
+            return
+        
+        try:
+            # 創建截圖目錄
+            screenshot_dir = "data/screenshots"
+            os.makedirs(screenshot_dir, exist_ok=True)
+            
+            # 生成截圖檔名
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_path = os.path.join(
+                screenshot_dir, f"timeout_{operation}_{timestamp}.png"
+            )
+            
+            # 截圖
+            self._page.screenshot(path=screenshot_path, full_page=True)
+            print(f"Screenshot saved: {screenshot_path}")
+            
+            # 發送 Telegram 通知（如果配置了 notifier）
+            if self.notifier:
+                current_url = url or self._page.url
+                self.notifier.notify_timeout_error(
+                    source=self.source_name,
+                    url=current_url,
+                    error_message=f"{operation}: {error_message}",
+                    screenshot_path=screenshot_path,
+                )
+                print("Timeout notification sent to Telegram")
+            else:
+                print("Telegram notifier not configured, skipping notification")
+                
+        except Exception as e:
+            print(f"Error handling timeout: {e}")
     
     def _handle_captcha(self) -> None:
         """
@@ -280,7 +336,7 @@ class AmazonScraper(BaseScraper):
                 
                 # 等待郵遞區號輸入框
                 try:
-                    self._page.wait_for_selector("#GLUXZipUpdateInput", timeout=5000)
+                    self._page.wait_for_selector("#GLUXZipUpdateInput", timeout=30000)
                     
                     # 輸入美國郵遞區號
                     zip_input = self._page.locator("#GLUXZipUpdateInput")
@@ -299,33 +355,121 @@ class AmazonScraper(BaseScraper):
                         if apply_button.count() > 0:
                             apply_button.first.click()
                             print("Applied ZIP code")
-                            time.sleep(2)
+                            time.sleep(3)  # 等待確認訊息出現
                             
-                            # 關閉彈出視窗（如果還開著）
-                            close_btn = self._page.locator(
-                                "button[data-action='a-popover-close'], "
-                                ".a-popover-close, "
-                                "#GLUXConfirmClose"
-                            )
-                            if close_btn.count() > 0:
-                                close_btn.first.click()
-                                time.sleep(1)
+                            # 關閉彈出視窗（確認按鈕）
+                            # 確認按鈕可能在確認訊息出現後才可見
+                            close_selectors = [
+                                "#GLUXConfirmClose",
+                                "input#GLUXConfirmClose[type='submit']",
+                                "button[data-action='a-popover-close']",
+                                ".a-popover-close",
+                            ]
+                            
+                            closed = False
+                            for selector in close_selectors:
+                                close_btn = self._page.locator(selector).first
+                                if close_btn.count() > 0:
+                                    try:
+                                        # 等待按鈕可見
+                                        close_btn.wait_for(state="visible", timeout=3000)
+                                        close_btn.click(timeout=2000)
+                                        print("Closed location popover")
+                                        closed = True
+                                        time.sleep(1)
+                                        break
+                                    except Exception:
+                                        # 如果不可見，嘗試 force 點擊
+                                        try:
+                                            close_btn.click(timeout=2000, force=True)
+                                            print("Closed location popover (force)")
+                                            closed = True
+                                            time.sleep(1)
+                                            break
+                                        except Exception:
+                                            continue
+                            
+                            # 如果還是沒關閉，嘗試按 ESC
+                            if not closed:
+                                try:
+                                    self._page.keyboard.press("Escape")
+                                    time.sleep(1)
+                                except Exception:
+                                    pass
                             
                             # 重新載入頁面以套用地區設定
                             print("Reloading page to apply location settings...")
                             self._page.reload(wait_until="domcontentloaded")
                             time.sleep(2)
                             
-                except PlaywrightTimeoutError:
-                    print("Warning: ZIP input not found, location may already be set")
+                except PlaywrightTimeoutError as e:
+                    error_msg = f"Timeout 30000ms exceeded."
+                    print(f"Warning: {error_msg}")
+                    # 截圖並發送通知
+                    self._handle_timeout_error("_set_us_location", error_msg)
                     # 嘗試關閉彈出視窗
-                    close_btn = self._page.locator("button[data-action='a-popover-close']")
-                    if close_btn.count() > 0:
-                        close_btn.first.click()
+                    self._close_all_popovers()
                         
+        except PlaywrightTimeoutError as e:
+            error_msg = str(e)
+            print(f"Warning: Failed to set US location: {error_msg}")
+            # 截圖並發送通知
+            self._handle_timeout_error("_set_us_location", error_msg)
+            # 繼續執行，可能已經是 USD 價格
         except Exception as e:
             print(f"Warning: Failed to set US location: {e}")
             # 繼續執行，可能已經是 USD 價格
+    
+    def _close_all_popovers(self) -> None:
+        """
+        關閉所有彈出視窗（location popover 等）
+        
+        確保在提取變體之前沒有彈出視窗擋住元素。
+        """
+        try:
+            # 檢查是否有彈出視窗
+            popover = self._page.locator(".a-popover, [data-action='a-popover-floating-close']").first
+            if popover.count() == 0:
+                return  # 沒有彈出視窗
+            
+            # 嘗試關閉 location popover
+            close_selectors = [
+                "#GLUXConfirmClose",
+                "button[data-action='a-popover-close']",
+                ".a-popover-close",
+                "button[aria-label='Close']",
+            ]
+            
+            for selector in close_selectors:
+                close_btn = self._page.locator(selector).first
+                if close_btn.count() > 0:
+                    try:
+                        # 使用 force 點擊，即使被其他元素擋住
+                        close_btn.click(timeout=2000, force=True)
+                        time.sleep(0.5)
+                        break
+                    except Exception:
+                        continue
+            
+            # 如果還有彈出視窗，嘗試按 ESC 鍵
+            try:
+                self._page.keyboard.press("Escape")
+                time.sleep(0.5)
+            except Exception:
+                pass
+            
+            # 再次檢查是否關閉
+            popover = self._page.locator(".a-popover, [data-action='a-popover-floating-close']").first
+            if popover.count() > 0:
+                # 如果還存在，嘗試點擊頁面其他地方關閉
+                try:
+                    self._page.click("body", position={"x": 10, "y": 10}, timeout=1000)
+                    time.sleep(0.5)
+                except Exception:
+                    pass
+                
+        except Exception as e:
+            print(f"Warning: Error closing popovers: {e}")
 
     
     def _extract_asin_from_page(self) -> Optional[str]:
@@ -456,6 +600,18 @@ class AmazonScraper(BaseScraper):
         Returns:
             價格（浮點數），若無法提取則返回 None
         """
+        return self._extract_price_from_page(self._page)
+    
+    def _extract_price_from_page(self, page) -> Optional[float]:
+        """
+        從指定頁面提取商品價格（USD）
+        
+        Args:
+            page: Playwright Page 對象
+            
+        Returns:
+            價格（浮點數），若無法提取則返回 None
+        """
         price_selectors = [
             # 主要價格選擇器
             ".a-price .a-offscreen",
@@ -474,11 +630,11 @@ class AmazonScraper(BaseScraper):
         ]
         
         for selector in price_selectors:
-            elements = self._page.locator(selector).all()
+            elements = page.locator(selector).all()
             for element in elements:
                 try:
-                    # 檢查元素是否在加購區塊中
-                    if self._is_in_addon_section(element):
+                    # 檢查元素是否在加購區塊中（僅對主頁面檢查）
+                    if page == self._page and self._is_in_addon_section(element):
                         continue
                     
                     price_text = element.inner_text().strip()
@@ -764,20 +920,83 @@ class AmazonScraper(BaseScraper):
             if variant_asin and variant_asin != base_asin:
                 variant_id = f"{variant_asin}_{variant_identifier}"
             
-            # 點擊變體以更新頁面價格（如果需要）
-            try:
-                if element.is_visible():
-                    element.click()
-                    time.sleep(1)  # 等待頁面更新價格
-            except Exception:
-                pass  # 如果點擊失敗，繼續使用當前價格
+            # 提取變體價格
+            # 優先方法：直接從變體元素本身提取價格（不需要點擊）
+            variant_price = self._get_variant_price(element)
             
-            # 提取變體價格（點擊後從頁面提取）
-            variant_price = self._extract_price()
-            
-            # 如果還是沒有價格，嘗試從元素本身提取
+            # 如果從元素本身無法提取價格，才嘗試其他方法
             if variant_price is None:
-                variant_price = self._get_variant_price(element)
+                # 備用方法：如果變體有專屬 ASIN，直接訪問該變體的 URL 獲取價格
+                if variant_asin and variant_asin != base_asin:
+                    try:
+                        variant_url = f"https://www.amazon.com/dp/{variant_asin}"
+                        context = self._page.context
+                        new_page = context.new_page()
+                        try:
+                            new_page.goto(variant_url, wait_until="domcontentloaded", timeout=30000)
+                            # 處理可能的 CAPTCHA
+                            try:
+                                captcha_btn = new_page.locator('input[type="submit"], button:has-text("Continue")').first
+                                if captcha_btn.count() > 0 and captcha_btn.is_visible():
+                                    captcha_btn.click(timeout=2000)
+                                    time.sleep(1)
+                            except Exception:
+                                pass
+                            time.sleep(2)
+                            variant_price = self._extract_price_from_page(new_page)
+                            if variant_price:
+                                print(f"  Extracted price ${variant_price} for {variant_name} from variant URL")
+                        finally:
+                            new_page.close()
+                    except Exception as e:
+                        print(f"Warning: Could not fetch price from variant URL: {e}")
+                
+                # 最後備用：點擊變體並等待價格更新（不推薦，因為可能被彈出視窗擋住）
+                if variant_price is None:
+                    try:
+                        self._close_all_popovers()
+                        if element.is_visible():
+                            old_price = self._extract_price()
+                            # 使用 JavaScript 觸發變體選擇
+                            try:
+                                variant_asin_attr = element.get_attribute("data-asin") or element.get_attribute("data-defaultasin")
+                                if variant_asin_attr:
+                                    self._page.evaluate("""
+                                        (asin) => {
+                                            const variant = document.querySelector(`[data-asin="${asin}"], [data-defaultasin="${asin}"]`);
+                                            if (variant) {
+                                                variant.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                                                variant.dispatchEvent(new Event('change', { bubbles: true }));
+                                            }
+                                        }
+                                    """, variant_asin_attr)
+                                else:
+                                    element.evaluate("element => element.click()")
+                            except Exception:
+                                try:
+                                    element.click(timeout=5000, force=True)
+                                except Exception:
+                                    pass
+                            
+                            # 等待價格更新
+                            for i in range(8):
+                                time.sleep(0.5)
+                                new_price = self._extract_price()
+                                if new_price is not None and new_price != old_price:
+                                    variant_price = new_price
+                                    print(f"  Extracted price ${variant_price} for {variant_name} after selection")
+                                    break
+                                elif new_price is not None and i >= 3:
+                                    variant_price = new_price
+                                    break
+                            
+                            if variant_price is None:
+                                variant_price = self._extract_price()
+                    except Exception as e:
+                        print(f"Warning: Error selecting variant: {e}")
+            
+            if variant_price:
+                print(f"  Extracted price ${variant_price} for {variant_name}")
             
             # 提取變體圖片
             variant_image = self._get_variant_image(element) or base_image
@@ -865,23 +1084,57 @@ class AmazonScraper(BaseScraper):
         return None
     
     def _get_variant_price(self, element) -> Optional[float]:
-        """從變體元素提取價格"""
+        """
+        從變體元素提取價格
+        
+        根據截圖，每個變體元素本身就有顯示價格，不需要點擊。
+        實際售價通常出現在 "with X percent savings" 之前，或是最小的價格。
+        """
         try:
-            # 嘗試從 data-price 屬性
-            price_attr = element.get_attribute("data-price")
-            if price_attr:
-                price = self._parse_usd_price(price_attr)
-                if price:
-                    return price
+            # 使用 JavaScript 查找元素內所有包含 $ 的文字（優先）
+            # 優先選擇實際售價（通常是最小的價格，或出現在 "with X percent savings" 之前的價格）
+            price_text = element.evaluate("""
+                (element) => {
+                    // 查找所有價格
+                    const allText = element.innerText || element.textContent;
+                    const priceMatches = allText.match(/\\$[\\d,]+\\.[\\d]{2}/g);
+                    
+                    if (!priceMatches || priceMatches.length === 0) {
+                        return null;
+                    }
+                    
+                    // 如果只有一個價格，直接返回
+                    if (priceMatches.length === 1) {
+                        return priceMatches[0];
+                    }
+                    
+                    // 如果有多個價格，優先選擇：
+                    // 1. 出現在 "with X percent savings" 之前的價格（實際售價）
+                    // 2. 最小的價格（實際售價通常比 List Price 小）
+                    
+                    // 檢查是否有 "with X percent savings" 的文字
+                    const savingsMatch = allText.match(/\\$[\\d,]+\\.[\\d]{2}\\s+with\\s+\\d+\\s+percent\\s+savings/i);
+                    if (savingsMatch) {
+                        // 返回 "with X percent savings" 之前的價格
+                        return savingsMatch[0].match(/\\$[\\d,]+\\.[\\d]{2}/)[0];
+                    }
+                    
+                    // 如果沒有 savings 文字，選擇最小的價格
+                    const prices = priceMatches.map(p => {
+                        const num = parseFloat(p.replace(/[\\$,]/g, ''));
+                        return { text: p, num: num };
+                    });
+                    
+                    // 排序並返回最小的（實際售價）
+                    prices.sort((a, b) => a.num - b.num);
+                    return prices[0].text;
+                }
+            """)
             
-            # 嘗試從元素內的價格文字
-            price_element = element.locator(".a-price .a-offscreen, .a-color-price").first
-            if price_element.count() > 0:
-                price_text = price_element.inner_text()
+            if price_text:
                 price = self._parse_usd_price(price_text)
                 if price:
                     return price
-            
         except Exception:
             pass
         
@@ -968,79 +1221,6 @@ class AmazonScraper(BaseScraper):
         return identifier or "default"
 
     
-    def _is_addon_section(self, element) -> bool:
-        """
-        判斷元素是否位於加購商品區塊中
-        
-        檢查元素是否在以下區塊中：
-        - "Frequently bought together"
-        - "Customers who viewed this item also viewed"
-        - "Sponsored products related to this item"
-        - "More items to explore"
-        - 其他推薦區塊
-        
-        Args:
-            element: 要檢查的元素
-            
-        Returns:
-            True 如果元素在加購區塊中，否則 False
-        """
-        try:
-            # 方法 1: 檢查元素是否在已知的加購區塊選擇器內
-            # 注意：此方法已簡化，主要依賴方法 2 的 JavaScript 檢查
-            pass
-            
-            # 方法 2: 使用 JavaScript 檢查祖先元素
-            is_in_addon = self._page.evaluate("""
-                (element) => {
-                    const addonSelectors = [
-                        '#similarities_feature_div',
-                        '#sims-fbt',
-                        '#sp_detail',
-                        '#anonCarousel',
-                        '#brand-snapshot-widget',
-                        '#HLCXComparisonWidget_feature_div',
-                        '#sims-consolidated-1_feature_div',
-                        '#sims-consolidated-2_feature_div',
-                        '#rhf',
-                        '#day0-sims-feature',
-                        '#p13n-asin-recommendations',
-                        '#sponsoredProducts2_feature_div',
-                        '#amsDetailRight_feature_div',
-                        '#productAlert_feature_div',
-                        '#almComparisonWidget_feature_div'
-                    ];
-                    
-                    let current = element;
-                    while (current && current !== document.body) {
-                        for (const selector of addonSelectors) {
-                            if (current.matches && current.matches(selector)) {
-                                return true;
-                            }
-                        }
-                        current = current.parentElement;
-                    }
-                    return false;
-                }
-            """, element.element_handle())
-            
-            if is_in_addon:
-                return True
-            
-            # 方法 3: 檢查附近的標題文字
-            nearby_text = self._get_nearby_section_text(element)
-            if nearby_text:
-                nearby_lower = nearby_text.lower()
-                for addon_text in self.ADDON_SECTION_TEXTS:
-                    if addon_text in nearby_lower:
-                        return True
-            
-        except Exception as e:
-            # 如果檢查失敗，保守起見返回 False
-            pass
-        
-        return False
-    
     def _is_in_addon_section(self, element) -> bool:
         """
         檢查元素是否在加購區塊中（簡化版本）
@@ -1126,37 +1306,3 @@ class AmazonScraper(BaseScraper):
         except Exception:
             return None
     
-    def _is_main_product_area(self, element) -> bool:
-        """
-        檢查元素是否在主商品區域中
-        
-        主商品區域通常由 #dp 或 #dp-container 標識。
-        
-        Args:
-            element: 要檢查的元素
-            
-        Returns:
-            True 如果元素在主商品區域中
-        """
-        try:
-            is_in_main = self._page.evaluate("""
-                (element) => {
-                    const mainSelectors = ['#dp', '#dp-container', '#ppd', '#centerCol'];
-                    
-                    let current = element;
-                    while (current && current !== document.body) {
-                        for (const selector of mainSelectors) {
-                            if (current.matches && current.matches(selector)) {
-                                return true;
-                            }
-                        }
-                        current = current.parentElement;
-                    }
-                    return false;
-                }
-            """, element.element_handle())
-            
-            return is_in_main
-            
-        except Exception:
-            return False
