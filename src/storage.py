@@ -33,8 +33,33 @@ class ProductStorage:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_id ON products(id)
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ignored_products (
+                product_id TEXT PRIMARY KEY
+            )
+        """)
         conn.commit()
         conn.close()
+
+    def add_ignored(self, product_id: str) -> None:
+        """將商品加入忽略清單"""
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR IGNORE INTO ignored_products (product_id) VALUES (?)",
+            (product_id,),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_ignored_ids(self) -> Set[str]:
+        """取得忽略清單中的商品 ID"""
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        cursor = conn.cursor()
+        cursor.execute("SELECT product_id FROM ignored_products")
+        ids = {row[0] for row in cursor.fetchall()}
+        conn.close()
+        return ids
 
     def get_existing_products(self, product_ids: Set[str]) -> Dict[str, Dict]:
         """取得現有商品資料（只查詢當前搜尋結果中出現的商品）"""
@@ -157,6 +182,7 @@ class ProductStorage:
         只比較兩次搜尋都出現的商品
         返回: {"new": [...], "price_dropped": [...]}
         """
+        ignored_ids = self.get_ignored_ids()
         current_ids = {p["id"] for p in current_products}
         existing_products = self.get_existing_products(current_ids)
 
@@ -165,6 +191,8 @@ class ProductStorage:
 
         for product in current_products:
             product_id = product["id"]
+            if product_id in ignored_ids:
+                continue
             if product_id not in existing_products:
                 # 新商品
                 new_products.append(product)
@@ -189,7 +217,9 @@ class ProductStorage:
 
                 # 只有在日幣價格確實降低時才通知
                 if price_dropped:
-                    old_price_twd = existing.get("price_twd") or existing.get("lowest_price_twd")
+                    old_price_twd = existing.get("price_twd") or existing.get(
+                        "lowest_price_twd"
+                    )
                     price_dropped_products.append(
                         {
                             "product": product,

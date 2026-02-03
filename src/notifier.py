@@ -1,14 +1,33 @@
+import html
 import os
 import requests
-from typing import Dict, List
+from urllib.parse import quote
+from typing import Dict, List, Optional
 
 
 class TelegramNotifier:
     def __init__(self, bot_token: str = None, chat_id: str = None):
         self.bot_token = bot_token or os.getenv("TELEGRAM_BOT_TOKEN")
         self.chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID")
+        self._bot_username: Optional[str] = None
         if not self.bot_token or not self.chat_id:
             raise ValueError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set")
+
+    def _get_bot_username(self) -> Optional[str]:
+        """取得 bot username，用於建構 ignore 連結"""
+        if self._bot_username is not None:
+            return self._bot_username
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/getMe"
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("ok"):
+                self._bot_username = data["result"].get("username")
+                return self._bot_username
+        except Exception as e:
+            print(f"Failed to get bot username: {e}")
+        return None
 
     def _send_message(self, text: str, photo_url: str = None):
         """發送 Telegram 訊息"""
@@ -57,10 +76,17 @@ class TelegramNotifier:
             f"{price_str}\n"
             f'<a href="{product["product_url"]}">查看商品</a>'
         )
+        ignore_link = self._build_ignore_link(product["id"])
+        if ignore_link:
+            message += f"\n{ignore_link}"
         return self._send_message(message, product.get("image_url"))
 
     def notify_price_drop(
-        self, product: Dict, old_price_jpy: int, old_price_twd: int = None, max_ntd: int = None
+        self,
+        product: Dict,
+        old_price_jpy: int,
+        old_price_twd: int = None,
+        max_ntd: int = None,
     ):
         """通知價格降低（只以日幣價格作為比價基準）"""
         price_jpy = product.get("price_jpy", 0)
@@ -116,7 +142,20 @@ class TelegramNotifier:
             f"{price_str}\n"
             f'<a href="{product["product_url"]}">查看商品</a>'
         )
+        ignore_link = self._build_ignore_link(product["id"])
+        if ignore_link:
+            message += f"\n{ignore_link}"
         return self._send_message(message, product.get("image_url"))
+
+    def _build_ignore_link(self, product_id: str) -> Optional[str]:
+        """建構可點擊的 /ignore 連結，點擊後預填指令"""
+        username = self._get_bot_username()
+        if not username:
+            return None
+        text = quote(f"/ignore {product_id}")
+        url = f"https://t.me/{username}?text={text}"
+        display = html.escape(f"/ignore {product_id}")
+        return f'<a href="{url}">{display}</a>'
 
     def notify_batch(
         self,
@@ -130,7 +169,9 @@ class TelegramNotifier:
         total_count = len(new_products) + len(price_dropped)
 
         # 使用 price_dropped_with_old_twd 如果提供，否則使用 price_dropped
-        price_dropped_list = price_dropped_with_old_twd if price_dropped_with_old_twd else price_dropped
+        price_dropped_list = (
+            price_dropped_with_old_twd if price_dropped_with_old_twd else price_dropped
+        )
 
         for product in new_products:
             # 檢查是否在預算內

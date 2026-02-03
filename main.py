@@ -2,12 +2,15 @@
 """
 Mercari 商品追蹤系統主程式
 """
+
 import json
+import os
 from dotenv import load_dotenv
 
 from src.scraper import MercariScraper
 from src.storage import ProductStorage
 from src.notifier import TelegramNotifier
+from src.telegram_commands import process_ignore_commands
 
 # 載入 .env 檔案
 load_dotenv()
@@ -30,10 +33,15 @@ def main():
         return
 
     # 初始化元件
+    storage = ProductStorage()
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if bot_token and chat_id:
+        process_ignore_commands(storage, bot_token, chat_id)
+
     # fetch_product_names=True 會訪問商品詳情頁獲取名稱（較慢但準確）
     # fetch_product_names=False 只使用搜尋結果頁的資訊（較快但可能沒有名稱）
     scraper = MercariScraper(headless=True, fetch_product_names=True)
-    storage = ProductStorage()
     notifier = TelegramNotifier()
 
     all_new_products = []
@@ -52,10 +60,10 @@ def main():
         if max_ntd is not None:
             print(f"Max NTD threshold: {max_ntd}")
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Processing: {name}")
         print(f"URL: {url}")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
         try:
             # 爬取商品
@@ -71,18 +79,24 @@ def main():
             if max_ntd is not None:
                 # 過濾新商品：只保留台幣價格 <= max_ntd 的商品
                 filtered_new_products = [
-                    p for p in new_products
+                    p
+                    for p in new_products
                     if p.get("price_twd", 0) > 0 and p.get("price_twd", 0) <= max_ntd
                 ]
-                print(f"New products (total: {len(new_products)}, within budget: {len(filtered_new_products)})")
+                print(
+                    f"New products (total: {len(new_products)}, within budget: {len(filtered_new_products)})"
+                )
 
                 # 過濾降價商品：只保留台幣價格 <= max_ntd 的商品
                 filtered_price_dropped = [
-                    item for item in price_dropped
+                    item
+                    for item in price_dropped
                     if item["product"].get("price_twd", 0) > 0
                     and item["product"].get("price_twd", 0) <= max_ntd
                 ]
-                print(f"Price dropped (total: {len(price_dropped)}, within budget: {len(filtered_price_dropped)})")
+                print(
+                    f"Price dropped (total: {len(price_dropped)}, within budget: {len(filtered_price_dropped)})"
+                )
 
                 new_products = filtered_new_products
                 price_dropped = filtered_price_dropped
@@ -100,14 +114,15 @@ def main():
         except Exception as e:
             print(f"Error processing {name}: {e}")
             import traceback
+
             traceback.print_exc()
             continue
 
     # 發送通知
     if all_new_products or all_price_dropped:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("Sending notifications...")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
         # 由於 main.py 處理多個 URL，每個 URL 可能有不同的 max_ntd
         # 我們需要分別處理每個商品的通知
@@ -126,7 +141,9 @@ def main():
             product = item["product"]
             old_price_jpy = item["old_price_jpy"]
             old_price_twd = item.get("old_price_twd")
-            if notifier.notify_price_drop(product, old_price_jpy, old_price_twd, max_ntd):
+            if notifier.notify_price_drop(
+                product, old_price_jpy, old_price_twd, max_ntd
+            ):
                 success_count += 1
 
         print(f"Notifications sent: {success_count}/{total_count}")
@@ -138,4 +155,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -2,6 +2,7 @@
 """
 測試 ProductStorage 類別
 """
+
 import unittest
 import os
 import tempfile
@@ -150,7 +151,63 @@ class TestProductStorage(unittest.TestCase):
         self.assertEqual(len(result["new"]), 0)
         self.assertEqual(len(result["price_dropped"]), 0)  # 價格提高，不應該觸發通知
 
+    def test_add_ignored_and_get_ignored_ids(self):
+        """測試加入忽略清單與取得忽略清單"""
+        self.assertEqual(self.storage.get_ignored_ids(), set())
+
+        self.storage.add_ignored("m12345678")
+        self.assertEqual(self.storage.get_ignored_ids(), {"m12345678"})
+
+        self.storage.add_ignored("m87654321")
+        self.assertEqual(self.storage.get_ignored_ids(), {"m12345678", "m87654321"})
+
+        self.storage.add_ignored("m12345678")
+        self.assertEqual(self.storage.get_ignored_ids(), {"m12345678", "m87654321"})
+
+    def test_compare_products_filters_ignored_new(self):
+        """測試比較商品 - 已忽略的新商品不納入"""
+        self.storage.add_ignored("ignored_new")
+
+        current_products = [
+            {
+                "id": "ignored_new",
+                "title": "已忽略新商品",
+                "price_jpy": 1000,
+                "price_twd": 200,
+                "image_url": "https://example.com/image.jpg",
+                "product_url": "https://example.com/product",
+            }
+        ]
+        result = self.storage.compare_products(current_products)
+        self.assertEqual(len(result["new"]), 0)
+        self.assertEqual(len(result["price_dropped"]), 0)
+
+    def test_compare_products_filters_ignored_price_drop(self):
+        """測試比較商品 - 已忽略商品的降價不納入"""
+        self.storage.add_ignored("ignored_drop")
+
+        product1 = {
+            "id": "ignored_drop",
+            "title": "測試商品",
+            "price_jpy": 1000,
+            "price_twd": 200,
+            "image_url": "https://example.com/image.jpg",
+            "product_url": "https://example.com/product",
+        }
+        self.storage.upsert_product(product1)
+
+        product2 = {
+            "id": "ignored_drop",
+            "title": "測試商品",
+            "price_jpy": 800,
+            "price_twd": 160,
+            "image_url": "https://example.com/image.jpg",
+            "product_url": "https://example.com/product",
+        }
+        result = self.storage.compare_products([product2])
+        self.assertEqual(len(result["new"]), 0)
+        self.assertEqual(len(result["price_dropped"]), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
-

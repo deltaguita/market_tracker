@@ -32,9 +32,15 @@ class TestTelegramNotifier(unittest.TestCase):
         self.assertEqual(notifier.bot_token, "custom_token")
         self.assertEqual(notifier.chat_id, "custom_chat")
 
+    @patch("src.notifier.requests.get")
     @patch("src.notifier.requests.post")
-    def test_notify_new_product(self, mock_post):
+    def test_notify_new_product(self, mock_post, mock_get):
         """測試通知新商品"""
+        mock_get.return_value.json.return_value = {
+            "ok": True,
+            "result": {"username": "test_bot"},
+        }
+        mock_get.return_value.raise_for_status = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
@@ -54,9 +60,15 @@ class TestTelegramNotifier(unittest.TestCase):
         self.assertTrue(result)
         mock_post.assert_called_once()
 
+    @patch("src.notifier.requests.get")
     @patch("src.notifier.requests.post")
-    def test_notify_price_drop(self, mock_post):
+    def test_notify_price_drop(self, mock_post, mock_get):
         """測試通知價格降低"""
+        mock_get.return_value.json.return_value = {
+            "ok": True,
+            "result": {"username": "test_bot"},
+        }
+        mock_get.return_value.raise_for_status = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
@@ -80,9 +92,15 @@ class TestTelegramNotifier(unittest.TestCase):
         call_args = mock_post.call_args
         self.assertIn("價格降低", str(call_args))
 
+    @patch("src.notifier.requests.get")
     @patch("src.notifier.requests.post")
-    def test_notify_batch(self, mock_post):
+    def test_notify_batch(self, mock_post, mock_get):
         """測試批次通知"""
+        mock_get.return_value.json.return_value = {
+            "ok": True,
+            "result": {"username": "test_bot"},
+        }
+        mock_get.return_value.raise_for_status = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
@@ -118,9 +136,15 @@ class TestTelegramNotifier(unittest.TestCase):
         self.assertEqual(total, 2)
         self.assertEqual(mock_post.call_count, 2)
 
+    @patch("src.notifier.requests.get")
     @patch("src.notifier.requests.post")
-    def test_notify_new_product_within_budget(self, mock_post):
+    def test_notify_new_product_within_budget(self, mock_post, mock_get):
         """測試通知預算內新商品上架"""
+        mock_get.return_value.json.return_value = {
+            "ok": True,
+            "result": {"username": "test_bot"},
+        }
+        mock_get.return_value.raise_for_status = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
@@ -146,9 +170,15 @@ class TestTelegramNotifier(unittest.TestCase):
         message_text = call_data.get("caption") or call_data.get("text", "")
         self.assertIn("有預算內目標商品上架", message_text)
 
+    @patch("src.notifier.requests.get")
     @patch("src.notifier.requests.post")
-    def test_notify_price_drop_to_budget(self, mock_post):
+    def test_notify_price_drop_to_budget(self, mock_post, mock_get):
         """測試通知降價至預算範圍"""
+        mock_get.return_value.json.return_value = {
+            "ok": True,
+            "result": {"username": "test_bot"},
+        }
+        mock_get.return_value.raise_for_status = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
@@ -177,9 +207,15 @@ class TestTelegramNotifier(unittest.TestCase):
         message_text = call_data.get("caption") or call_data.get("text", "")
         self.assertIn("降價至預算範圍", message_text)
 
+    @patch("src.notifier.requests.get")
     @patch("src.notifier.requests.post")
-    def test_notify_price_drop_within_budget(self, mock_post):
+    def test_notify_price_drop_within_budget(self, mock_post, mock_get):
         """測試通知預算內商品降價（保持原樣）"""
+        mock_get.return_value.json.return_value = {
+            "ok": True,
+            "result": {"username": "test_bot"},
+        }
+        mock_get.return_value.raise_for_status = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
@@ -208,6 +244,62 @@ class TestTelegramNotifier(unittest.TestCase):
         message_text = call_data.get("caption") or call_data.get("text", "")
         self.assertIn("價格降低", message_text)
         self.assertNotIn("降價至預算範圍", message_text)
+
+    @patch("src.notifier.requests.get")
+    @patch("src.notifier.requests.post")
+    def test_notify_new_product_includes_ignore_link(self, mock_post, mock_get):
+        """測試通知訊息包含 /ignore 連結"""
+        mock_get.return_value.json.return_value = {
+            "ok": True,
+            "result": {"username": "test_bot"},
+        }
+        mock_get.return_value.raise_for_status = MagicMock()
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.raise_for_status = MagicMock()
+
+        notifier = TelegramNotifier()
+        product = {
+            "id": "m12345678",
+            "title": "測試商品",
+            "price_jpy": 1000,
+            "price_twd": 200,
+            "image_url": "https://example.com/image.jpg",
+            "product_url": "https://example.com/product",
+        }
+
+        notifier.notify_new_product(product)
+        call_data = mock_post.call_args[1]["json"]
+        message_text = call_data.get("caption") or call_data.get("text", "")
+        self.assertIn("/ignore m12345678", message_text)
+        self.assertIn("t.me/test_bot", message_text)
+
+    @patch("src.notifier.requests.get")
+    @patch("src.notifier.requests.post")
+    def test_notify_price_drop_includes_ignore_link(self, mock_post, mock_get):
+        """測試降價通知訊息包含 /ignore 連結"""
+        mock_get.return_value.json.return_value = {
+            "ok": True,
+            "result": {"username": "test_bot"},
+        }
+        mock_get.return_value.raise_for_status = MagicMock()
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.raise_for_status = MagicMock()
+
+        notifier = TelegramNotifier()
+        product = {
+            "id": "m87654321",
+            "title": "測試商品",
+            "price_jpy": 800,
+            "price_twd": 160,
+            "image_url": "https://example.com/image.jpg",
+            "product_url": "https://example.com/product",
+        }
+
+        notifier.notify_price_drop(product, old_price_jpy=1000)
+        call_data = mock_post.call_args[1]["json"]
+        message_text = call_data.get("caption") or call_data.get("text", "")
+        self.assertIn("/ignore m87654321", message_text)
+        self.assertIn("t.me/test_bot", message_text)
 
 
 if __name__ == "__main__":
