@@ -121,6 +121,7 @@ jobs:
     needs: [track, update-exchange-rate]
     runs-on: ubuntu-latest
     permissions:
+      actions: read   # 列出/下載同 run 的 artifacts 需要
       contents: write
     steps:
       - name: Checkout code
