@@ -209,3 +209,117 @@ class TestProcessAddCommands(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestProcessCommands(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.config_path = os.path.join(self.temp_dir, "urls.json")
+        self.offset_path = os.path.join(self.temp_dir, "commands_offset.txt")
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "tracking_urls": [
+                        {
+                            "name": "既有",
+                            "url": "https://jp.mercari.com/search?keyword=exist",
+                            "max_ntd": 3000,
+                        }
+                    ]
+                },
+                f,
+                ensure_ascii=False,
+            )
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _read_config(self):
+        with open(self.config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def _run(self, updates):
+        with patch("src.url_commands._telegram_send_message") as mock_send, patch(
+            "src.url_commands._telegram_get_updates", return_value=updates
+        ):
+            summary = url_commands.process_commands(
+                "token",
+                "12345",
+                config_path=self.config_path,
+                offset_path=self.offset_path,
+            )
+        return summary, mock_send
+
+    def test_list_sends_all_entries(self):
+        summary, mock_send = self._run(_updates((12345, "/list")))
+        self.assertEqual(summary["listed"], 1)
+        mock_send.assert_called_once()
+        sent_text = mock_send.call_args[0][2]
+        self.assertIn("既有", sent_text)
+
+    def test_remove_by_name(self):
+        summary, mock_send = self._run(_updates((12345, "/remove 既有")))
+        self.assertEqual(len(summary["removed"]), 1)
+        self.assertEqual(self._read_config()["tracking_urls"], [])
+        mock_send.assert_called_once()
+
+    def test_remove_by_url(self):
+        summary, _ = self._run(
+            _updates((12345, "/remove https://jp.mercari.com/search?keyword=exist"))
+        )
+        self.assertEqual(len(summary["removed"]), 1)
+        self.assertEqual(self._read_config()["tracking_urls"], [])
+
+    def test_remove_not_found_notifies_no_change(self):
+        summary, mock_send = self._run(_updates((12345, "/remove 不存在")))
+        self.assertEqual(summary["removed"], [])
+        self.assertEqual(len(self._read_config()["tracking_urls"]), 1)
+        mock_send.assert_called_once()
+
+    def test_add_via_process_commands(self):
+        url = "https://jp.mercari.com/search?keyword=new"
+        summary, _ = self._run(_updates((12345, f"/add {url} | 新商品 | 500")))
+        self.assertEqual(len(summary["added"]), 1)
+        cfg = self._read_config()["tracking_urls"]
+        self.assertEqual(len(cfg), 2)
+        self.assertEqual(cfg[1]["max_ntd"], 500)
+
+    def test_marker_prevents_reprocessing(self):
+        """記住已執行過的指令：相同 updates 第二次不應重工。"""
+        updates = _updates((12345, "/list"))
+        summary1, send1 = self._run(updates)
+        self.assertEqual(summary1["listed"], 1)
+        self.assertEqual(summary1["marker"], 1)
+
+        # 第二次餵入相同 updates（marker 已寫檔）→ 不應再回覆
+        summary2, send2 = self._run(updates)
+        self.assertEqual(summary2["listed"], 0)
+        send2.assert_not_called()
+
+    def test_marker_only_advances_for_our_commands(self):
+        """/ignore 等非設定層指令不應推進 marker（交給 scraper 獨立處理）。"""
+        summary, _ = self._run(_updates((12345, "/ignore m123")))
+        self.assertIsNone(summary["marker"])
+        self.assertFalse(os.path.exists(self.offset_path))
+
+    def test_new_command_after_marker_is_processed(self):
+        self._run(_updates((12345, "/list")))  # marker -> 1
+        # update_id=2 的新指令應被處理
+        updates = {
+            "ok": True,
+            "result": [
+                {
+                    "update_id": 2,
+                    "message": {"chat": {"id": 12345}, "text": "/remove 既有"},
+                }
+            ],
+        }
+        summary, _ = self._run(updates)
+        self.assertEqual(len(summary["removed"]), 1)
+        self.assertEqual(summary["marker"], 2)
+
+    def test_wrong_chat_ignored(self):
+        summary, mock_send = self._run(_updates((99999, "/list")))
+        self.assertEqual(summary["listed"], 0)
+        mock_send.assert_not_called()
+        self.assertIsNone(summary["marker"])

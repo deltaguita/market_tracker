@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 
 CONFIG_PATH = "config/urls.json"
+OFFSET_PATH = "data/commands_offset.txt"
 _API_BASE = "https://api.telegram.org/bot{token}/{method}"
 
 
@@ -206,3 +207,225 @@ def process_add_commands(bot_token, chat_id, config_path=CONFIG_PATH):
         print(f"Added {len(added)} new tracking URL(s)")
 
     return added
+
+
+# ---------------------------------------------------------------------------
+# 指令去重 marker：記錄「已處理到哪個 Telegram update_id」
+#
+# 重要：這裡「不」推進 Telegram 全域 offset（getUpdates 不帶 offset），
+# 因為 offset 是 bot 全域共享，一旦確認會連帶消費掉 scraper 要處理的 /ignore。
+# 改用本地（且會被 commit）的 marker，只在應用層過濾已處理的指令，
+# 確保 /list、/remove、/add 每則只執行一次，避免每 10 分鐘重工/洗版。
+# ---------------------------------------------------------------------------
+
+
+def _load_marker(offset_path):
+    if not os.path.exists(offset_path):
+        return None
+    try:
+        with open(offset_path, "r") as f:
+            return int(f.read().strip())
+    except (ValueError, OSError):
+        return None
+
+
+def _save_marker(offset_path, value):
+    os.makedirs(os.path.dirname(offset_path) or ".", exist_ok=True)
+    with open(offset_path, "w") as f:
+        f.write(str(value))
+
+
+def _format_list(tracking_urls):
+    """組出 /list 回覆內容。"""
+    if not tracking_urls:
+        return "📋 <b>追蹤清單</b>\n\n目前沒有追蹤任何商品。"
+    lines = ["📋 <b>追蹤清單</b>"]
+    for i, entry in enumerate(tracking_urls, start=1):
+        name = entry.get("name", "Unknown")
+        budget = (
+            f"（≤ {entry['max_ntd']} NTD）" if entry.get("max_ntd") is not None else ""
+        )
+        lines.append(f"\n{i}. <b>{name}</b>{budget}\n{entry.get('url', '')}")
+    lines.append("\n\n移除：<code>/remove &lt;名稱&gt;</code>")
+    return "".join(lines)
+
+
+def _find_remove_targets(target, tracking_urls):
+    """
+    找出要移除的項目索引。先以名稱精確比對，找不到再以正規化 URL 比對。
+    回傳索引列表（可能 0、1 或多筆）。
+    """
+    matches = [i for i, e in enumerate(tracking_urls) if e.get("name") == target]
+    if matches:
+        return matches
+    tnorm = _normalize_url(target)
+    return [
+        i
+        for i, e in enumerate(tracking_urls)
+        if e.get("url") and _normalize_url(e["url"]) == tnorm
+    ]
+
+
+def process_commands(
+    bot_token,
+    chat_id,
+    config_path=CONFIG_PATH,
+    offset_path=OFFSET_PATH,
+):
+    """
+    統一處理 Telegram 設定層指令：/add、/remove、/list。
+
+    使用本地 marker（offset_path）記住已處理的 update_id，確保每則指令只執行一次
+    （避免每 10 分鐘排程重工）。回傳摘要 dict。
+
+    回傳：
+        {
+          "added": [...],       # 本次新增的項目
+          "removed": [...],     # 本次移除的項目
+          "listed": int,        # 本次回覆 /list 的次數
+          "config_changed": bool,
+          "marker": int | None, # 更新後的 marker
+        }
+    """
+    summary = {
+        "added": [],
+        "removed": [],
+        "listed": 0,
+        "config_changed": False,
+        "marker": None,
+    }
+
+    try:
+        data = _telegram_get_updates(bot_token)
+    except Exception as e:  # noqa: BLE001
+        print(f"Failed to fetch Telegram updates: {e}")
+        return summary
+
+    marker = _load_marker(offset_path)
+    summary["marker"] = marker
+    if not data.get("ok") or not data.get("result"):
+        return summary
+
+    config = _load_config(config_path)
+    tracking_urls = config.get("tracking_urls", [])
+    existing_norms = {
+        _normalize_url(u["url"]) for u in tracking_urls if u.get("url")
+    }
+
+    new_marker = marker
+    handled = False  # 是否處理過「我們的」指令（決定是否需要更新/commit marker）
+
+    for update in sorted(data["result"], key=lambda u: u.get("update_id", 0)):
+        uid = update.get("update_id")
+        if uid is None:
+            continue
+        if marker is not None and uid <= marker:
+            continue  # 已處理過，跳過（記住哪個指令執行過了）
+
+        message = update.get("message") or update.get("edited_message")
+        if not message:
+            continue
+        if str(message.get("chat", {}).get("id")) != str(chat_id):
+            continue
+
+        text = (message.get("text") or "").strip()
+        lower = text.lower()
+
+        # 只有「我們的」指令才推進 marker；其餘（如 /ignore、閒聊）不碰，
+        # 交由各自的獨立讀取處理，避免影響 scraper 的 /ignore。
+        if lower.startswith("/add"):
+            handled = True
+            new_marker = uid if new_marker is None else max(new_marker, uid)
+            try:
+                url, name, max_ntd = parse_add_command(text)
+            except ValueError as e:
+                _telegram_send_message(
+                    bot_token,
+                    chat_id,
+                    (
+                        f"⚠️ <b>新增失敗</b>\n{e}\n\n"
+                        "格式：<code>/add &lt;url&gt; | &lt;名稱&gt; | &lt;max_ntd&gt;</code>"
+                    ),
+                )
+                continue
+            norm = _normalize_url(url)
+            if norm in existing_norms:
+                _telegram_send_message(
+                    bot_token, chat_id, f"ℹ️ <b>已在追蹤清單</b>\n{name}"
+                )
+                continue
+            entry = {"name": name, "url": url}
+            if max_ntd is not None:
+                entry["max_ntd"] = max_ntd
+            tracking_urls.append(entry)
+            existing_norms.add(norm)
+            summary["added"].append(entry)
+            summary["config_changed"] = True
+            budget = f"\n預算上限：{max_ntd} NTD" if max_ntd is not None else ""
+            _telegram_send_message(
+                bot_token, chat_id, f"✅ <b>已加入追蹤</b>\n{name}{budget}"
+            )
+
+        elif lower.startswith("/remove"):
+            handled = True
+            new_marker = uid if new_marker is None else max(new_marker, uid)
+            parts = text.split(maxsplit=1)
+            target = parts[1].strip() if len(parts) > 1 else ""
+            if not target:
+                _telegram_send_message(
+                    bot_token,
+                    chat_id,
+                    "⚠️ <b>移除失敗</b>\n請指定名稱或 URL：<code>/remove &lt;名稱&gt;</code>",
+                )
+                continue
+            idxs = _find_remove_targets(target, tracking_urls)
+            if not idxs:
+                _telegram_send_message(
+                    bot_token, chat_id, f"❓ <b>找不到</b>\n清單中沒有「{target}」"
+                )
+                continue
+            if len(idxs) > 1:
+                _telegram_send_message(
+                    bot_token,
+                    chat_id,
+                    (
+                        f"⚠️ <b>名稱重複</b>\n有 {len(idxs)} 筆叫「{target}」，"
+                        "請改用完整 URL 移除：<code>/remove &lt;url&gt;</code>"
+                    ),
+                )
+                continue
+            removed = tracking_urls.pop(idxs[0])
+            if removed.get("url"):
+                existing_norms.discard(_normalize_url(removed["url"]))
+            summary["removed"].append(removed)
+            summary["config_changed"] = True
+            _telegram_send_message(
+                bot_token,
+                chat_id,
+                f"🗑️ <b>已移除</b>\n{removed.get('name', 'Unknown')}",
+            )
+
+        elif lower.startswith("/list"):
+            handled = True
+            new_marker = uid if new_marker is None else max(new_marker, uid)
+            _telegram_send_message(bot_token, chat_id, _format_list(tracking_urls))
+            summary["listed"] += 1
+
+        else:
+            # 非設定層指令（例如 /ignore）：不處理、不推進 marker
+            continue
+
+    if summary["config_changed"]:
+        config["tracking_urls"] = tracking_urls
+        _save_config(config_path, config)
+
+    if handled and new_marker is not None and new_marker != marker:
+        _save_marker(offset_path, new_marker)
+        summary["marker"] = new_marker
+
+    print(
+        "process_commands: "
+        f"added={len(summary['added'])} removed={len(summary['removed'])} "
+        f"listed={summary['listed']} marker={summary['marker']}"
+    )
+    return summary

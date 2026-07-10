@@ -17,19 +17,27 @@
 
 3. Workflow 會自動執行（每 6 小時）
 
-## 用 Telegram 新增追蹤商品
+## 用 Telegram 管理追蹤商品
 
-直接傳訊息給 bot 即可，下一次 workflow 執行時會自動加入清單並開始追蹤：
+直接傳訊息給 bot 即可。有一個獨立的輕量 workflow 每 10 分鐘處理一次指令
+（與爬蟲解耦），處理後會更新清單並回覆你：
 
 ```
 /add <url>
 /add <url> | <名稱>
 /add <url> | <名稱> | <max_ntd>
+/remove <名稱>
+/remove <url>
+/list
 ```
 
-- 只給 URL 時，名稱會自動從網址的 `keyword` 參數推導。
+- `/add` 只給 URL 時，名稱會自動從網址的 `keyword` 參數推導；重複的網址會自動略過。
+- `/remove` 以名稱精確比對移除；名稱重複時請改用完整 URL。
+- `/list` 回傳目前追蹤清單。
 - `max_ntd` 為可選的台幣價格門檻（正整數）。
-- 重複的網址會自動略過，不會重複加入。
+- 每則指令只會執行一次（以 `data/commands_offset.txt` 記錄已處理的訊息），不會重工或洗版。
+
+> 註：指令生效與回覆約需數分鐘（受 GitHub Actions 排程延遲影響），並非即時。
 
 ## 授權
 

@@ -23,7 +23,21 @@
 ## Open failures / TODO
 - （選用）Telegram getUpdates 的 offset 檔 `data/telegram_offset.txt` 未被 commit，靠 Telegram ~24h 保留期意外讓 `/ignore` 短期可讀；非致命，未處理。
 
-## Feature: Telegram /add 新增追蹤商品（2026-07-11）
+## Feature: 互動指令 workflow /add /remove /list（Option B，2026-07-11）
+- 決策：把「設定層指令」從 scraper 解耦到獨立輕量 workflow。已**回退**先前把 `/add` 放進 scraper `prepare` 的耦合設計。
+- `.github/workflows/commands.yml`：`*/10` 全天排程 + workflow_dispatch，`concurrency` 防重疊，`contents: write`，跑 `process_commands.py`（系統 python3、不 pip install），commit `config/urls.json` + `data/commands_offset.txt`（明確檔名）。
+- `src/url_commands.py` 新增 `process_commands()`：統一處理 `/add`、`/remove`、`/list`。`process_add_commands()` 仍保留（供舊測試）。
+- `process_commands.py`（root）= commands.yml 進入點；`process_new_urls.py` 已 `git rm`（prepare 不再處理指令）。
+- scraper (`track_products.yml`) 現在**只讀不寫** `config/urls.json`：`prepare` 只有 checkout + matrix；`finalize` 不再下載/複製/commit urls.json，`git add` 僅 `data/products.db data/exchange_rate.db`。→ 唯一 urls.json writer 是 commands.yml，無 race。
+- 測試：`tests/test_url_commands.py` 共 21 個（含 marker 冪等）。全套 55 tests OK（subagent 環境缺 playwright 會誤報 test_scraper import 失敗，非程式問題）。
+
+## 指令冪等 / 記住已執行（重要）
+- **核心機制**：commands.yml 用 committed 的 `data/commands_offset.txt` 當 high-water marker，記錄「已處理到哪個 update_id」。`getUpdates` **不帶 offset**（不推進 Telegram 全域 offset），只在應用層用 marker 過濾。
+- 效果：`/list`、`/remove`、`/add` 每則只執行一次（10 分鐘排程不會重工/洗版）；marker **只為我們的指令推進**，`/ignore` 不碰。
+- `/ignore` 不受影響：scraper 的 `main_single.py` → `process_ignore_commands()` 仍獨立讀取（用自己的 `data/telegram_offset.txt`，且未 commit）。兩個 getUpdates 讀取者都不確認 Telegram offset，故互不干擾。
+- `/remove`：先名稱精確比對，找不到再用正規化 URL 比對；名稱重複則要求改用 URL。
+
+## Feature: Telegram /add 新增追蹤商品（2026-07-11，已被 Option B 取代部分）
 - 指令格式：`/add <url>`、`/add <url> | <名稱>`、`/add <url> | <名稱> | <max_ntd>`。只給 URL 時 name 由 query 的 `keyword` percent-decode 推導；max_ntd 需正整數。
 - `src/url_commands.py`（**純 stdlib，用 urllib 不用 requests**）：`process_add_commands()` 讀 getUpdates、解析、URL 正規化去重後寫 `config/urls.json`。刻意不依賴 requests，好讓 CI `prepare` job 用系統 python3 直接跑、免 setup-python / pip install。
 - `process_new_urls.py`（root）：prepare job 進入點，無 secrets 時 graceful skip。

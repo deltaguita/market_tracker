@@ -1,0 +1,60 @@
+name: Process Commands
+
+# 輕量、高頻的指令處理 workflow（與重量級爬蟲解耦）
+# 只讀 Telegram /add、/remove、/list，更新 config/urls.json 後 commit + 回覆。
+# 不安裝任何套件，用系統 python3 + 標準庫，一次約 20-30 秒。
+on:
+  schedule:
+    # 每 10 分鐘（GHA 排程為盡力而為，實際可能延遲）
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+# 避免多個排程重疊執行造成 commit 競爭
+concurrency:
+  group: process-commands
+  cancel-in-progress: false
+
+jobs:
+  commands:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Process Telegram commands
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python3 process_commands.py
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "deltaguita@gmail.com"
+          git config --local user.name "deltaguita"
+
+          # 明確指定檔案（marker 首次可能尚未存在）
+          git add config/urls.json
+          if [ -f data/commands_offset.txt ]; then
+            git add data/commands_offset.txt
+          fi
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "Update tracking list via Telegram commands [skip ci]"
+
+          # 與遠端同步後再推
+          git fetch origin
+          if [ -n "$(git log HEAD..origin/main)" ]; then
+            git pull --rebase origin main || {
+              echo "Rebase failed, aborting and retrying with merge"
+              git rebase --abort 2>/dev/null || true
+              git pull origin main --no-rebase -X ours || true
+            }
+          fi
+          git push origin main
