@@ -43,6 +43,12 @@ def merge_databases(source_dbs: list, target_db: str):
     target_cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_id ON products(id)
     """)
+    # 忽略清單表：必須跨合併保留，否則每次排程都會遺失使用者的 /ignore 設定
+    target_cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ignored_products (
+            product_id TEXT PRIMARY KEY
+        )
+    """)
     target_conn.commit()
     
     # 合併每個來源資料庫
@@ -151,6 +157,18 @@ def merge_databases(source_dbs: list, target_db: str):
                     product.get("lowest_price_jpy"),
                     product.get("lowest_price_twd")
                 ))
+        
+        # 合併忽略清單（來源可能是舊格式而沒有此表，需容錯）
+        try:
+            source_cursor.execute("SELECT product_id FROM ignored_products")
+            ignored_rows = source_cursor.fetchall()
+        except sqlite3.OperationalError:
+            ignored_rows = []
+        for (ignored_id,) in ignored_rows:
+            target_cursor.execute(
+                "INSERT OR IGNORE INTO ignored_products (product_id) VALUES (?)",
+                (ignored_id,),
+            )
         
         source_conn.close()
     
