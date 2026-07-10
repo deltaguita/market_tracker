@@ -323,3 +323,24 @@ class TestProcessCommands(unittest.TestCase):
         self.assertEqual(summary["listed"], 0)
         mock_send.assert_not_called()
         self.assertIsNone(summary["marker"])
+
+    def test_list_includes_tappable_remove_token(self):
+        summary, mock_send = self._run(_updates((12345, "/list")))
+        sent_text = mock_send.call_args[0][2]
+        short = url_commands._short_id(
+            "https://jp.mercari.com/search?keyword=exist"
+        )
+        self.assertIn(f"/remove_{short}", sent_text)
+
+    def test_remove_by_short_id(self):
+        short = url_commands._short_id(
+            "https://jp.mercari.com/search?keyword=exist"
+        )
+        summary, _ = self._run(_updates((12345, f"/remove_{short}")))
+        self.assertEqual(len(summary["removed"]), 1)
+        self.assertEqual(self._read_config()["tracking_urls"], [])
+
+    def test_short_id_stable_regardless_of_query_order(self):
+        a = url_commands._short_id("https://x.com/s?keyword=abc&status=on_sale")
+        b = url_commands._short_id("https://x.com/s?status=on_sale&keyword=abc")
+        self.assertEqual(a, b)

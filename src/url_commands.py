@@ -13,6 +13,7 @@
 
 import json
 import os
+import hashlib
 import urllib.parse
 import urllib.request
 
@@ -236,26 +237,55 @@ def _save_marker(offset_path, value):
 
 
 def _format_list(tracking_urls):
-    """組出 /list 回覆內容。"""
+    """組出 /list 回覆內容，每筆附上可直接點按的 /remove_<id>。"""
     if not tracking_urls:
         return "📋 <b>追蹤清單</b>\n\n目前沒有追蹤任何商品。"
     lines = ["📋 <b>追蹤清單</b>"]
     for i, entry in enumerate(tracking_urls, start=1):
         name = entry.get("name", "Unknown")
+        url = entry.get("url", "")
         budget = (
             f"（≤ {entry['max_ntd']} NTD）" if entry.get("max_ntd") is not None else ""
         )
-        lines.append(f"\n{i}. <b>{name}</b>{budget}\n{entry.get('url', '')}")
-    lines.append("\n\n移除：<code>/remove &lt;名稱&gt;</code>")
+        # /remove_<8碼hash> 是可點連結，點一下即送出，免手打名稱
+        rm = f"/remove_{_short_id(url)}" if url else ""
+        lines.append(f"\n{i}. <b>{name}</b>{budget}\n{url}\n移除：{rm}")
     return "".join(lines)
+
+
+def _short_id(url):
+    """由正規化後的 URL 產生穩定的 8 碼短 id（不受清單順序影響）。"""
+    norm = _normalize_url(url)
+    return hashlib.sha1(norm.encode("utf-8")).hexdigest()[:8]
+
+
+def _parse_remove_target(text):
+    """
+    解析 /remove 的目標。支援：
+      /remove <名稱或 URL>
+      /remove_<short_id>   （/list 附上的可點連結）
+    """
+    stripped = text.strip()
+    first = stripped.split()[0] if stripped.split() else ""
+    if first.lower().startswith("/remove_"):
+        return first[len("/remove_") :].strip()
+    parts = stripped.split(maxsplit=1)
+    return parts[1].strip() if len(parts) > 1 else ""
 
 
 def _find_remove_targets(target, tracking_urls):
     """
-    找出要移除的項目索引。先以名稱精確比對，找不到再以正規化 URL 比對。
+    找出要移除的項目索引。依序嘗試：名稱精確比對 → 短 id → 正規化 URL。
     回傳索引列表（可能 0、1 或多筆）。
     """
     matches = [i for i, e in enumerate(tracking_urls) if e.get("name") == target]
+    if matches:
+        return matches
+    matches = [
+        i
+        for i, e in enumerate(tracking_urls)
+        if e.get("url") and _short_id(e["url"]) == target
+    ]
     if matches:
         return matches
     tnorm = _normalize_url(target)
@@ -369,8 +399,7 @@ def process_commands(
         elif lower.startswith("/remove"):
             handled = True
             new_marker = uid if new_marker is None else max(new_marker, uid)
-            parts = text.split(maxsplit=1)
-            target = parts[1].strip() if len(parts) > 1 else ""
+            target = _parse_remove_target(text)
             if not target:
                 _telegram_send_message(
                     bot_token,
