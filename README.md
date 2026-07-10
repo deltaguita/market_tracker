@@ -17,6 +17,20 @@
 
 3. Workflow 會自動執行（每 6 小時）
 
+## 用 Telegram 新增追蹤商品
+
+直接傳訊息給 bot 即可，下一次 workflow 執行時會自動加入清單並開始追蹤：
+
+```
+/add <url>
+/add <url> | <名稱>
+/add <url> | <名稱> | <max_ntd>
+```
+
+- 只給 URL 時，名稱會自動從網址的 `keyword` 參數推導。
+- `max_ntd` 為可選的台幣價格門檻（正整數）。
+- 重複的網址會自動略過，不會重複加入。
+
 ## 授權
 
 MIT License

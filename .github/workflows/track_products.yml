@@ -16,6 +16,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # 第一步：讀取 Telegram /add 指令，將新商品寫入 config/urls.json（去重）
+      # 只用系統 python3 + 標準庫，不需 setup-python / pip install
+      - name: Process /add commands from Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python3 process_new_urls.py
+
+      # 上傳更新後的追蹤清單，供 finalize 一併 commit
+      - name: Upload updated URLs config as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: urls-config
+          path: config/urls.json
+          retention-days: 1
+
       - name: Generate matrix from URLs
         id: set-matrix
         run: |
@@ -141,6 +158,13 @@ jobs:
           merge-multiple: false
           path: artifacts/
 
+      - name: Download updated URLs config
+        uses: actions/download-artifact@v4
+        with:
+          pattern: urls-config
+          merge-multiple: false
+          path: artifacts/
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -160,6 +184,15 @@ jobs:
             echo "警告: 未找到匯率資料庫，使用現有的"
           fi
 
+      - name: Copy updated URLs config
+        run: |
+          if [ -f "artifacts/urls-config/urls.json" ]; then
+            cp artifacts/urls-config/urls.json config/urls.json
+            echo "✓ 已更新追蹤清單"
+          else
+            echo "警告: 未找到更新的追蹤清單，使用現有的"
+          fi
+
       - name: Commit and push all changes
         run: |
           git config --local user.email "deltaguita@gmail.com"
@@ -167,7 +200,7 @@ jobs:
           # 先 fetch 遠端變更
           git fetch origin
           # 暫存變更
-          git add data/products.db data/exchange_rate.db
+          git add data/products.db data/exchange_rate.db config/urls.json
           # 如果有變更，先 commit
           if ! git diff --staged --quiet; then
             git commit -m "Update product data and exchange rate [skip ci]"
@@ -182,7 +215,7 @@ jobs:
                 echo "Merge also failed, forcing push (database files should take precedence)"
                 git reset --hard HEAD
                 git pull origin main --no-rebase || true
-                git add data/products.db data/exchange_rate.db
+                git add data/products.db data/exchange_rate.db config/urls.json
                 git commit -m "Update product data and exchange rate [skip ci]" || true
               }
             }
