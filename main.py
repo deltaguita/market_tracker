@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from src.scraper import MercariScraper
 from src.storage import ProductStorage
+from src.title_filter import filter_products
 from src.notifier import TelegramNotifier
 from src.telegram_commands import process_ignore_commands
 
@@ -69,6 +70,9 @@ def main():
             # 爬取商品
             current_products = scraper.scrape(url)
             print(f"Scraped {len(current_products)} products")
+            current_products = filter_products(
+                current_products, url_config.get("must_match")
+            )
 
             # 比較並更新
             result = storage.compare_products(current_products)

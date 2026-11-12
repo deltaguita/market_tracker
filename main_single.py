@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from src.scraper import MercariScraper
 from src.storage import ProductStorage
+from src.title_filter import filter_products
 from src.notifier import TelegramNotifier
 from src.telegram_commands import process_ignore_commands
 
@@ -46,6 +47,7 @@ def main():
     name = url_config.get("name", "Unknown")
     url = url_config.get("url")
     max_ntd = url_config.get("max_ntd")  # 可選的台幣價格門檻
+    must_match = url_config.get("must_match")  # 可選的標題關鍵字組
 
     if not url:
         print(f"Skipping {name}: No URL provided")
@@ -73,6 +75,9 @@ def main():
         # 爬取商品
         current_products = scraper.scrape(url)
         print(f"Scraped {len(current_products)} products")
+
+        # 標題過濾（排除搜尋結果中只符合品牌的無關商品）
+        current_products = filter_products(current_products, must_match)
 
         # 比較並更新
         result = storage.compare_products(current_products)
